@@ -1,0 +1,923 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: svc-00
+  namespace: team-0
+  labels:
+    app: svc-00
+    tier: backend
+    managed-by: platform
+  annotations:
+    config.example.com/checksum: "00000000"
+    config.example.com/owner: team-0@example.com
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: svc-00
+  template:
+    metadata:
+      labels:
+        app: svc-00
+        version: v0.0.0
+    spec:
+      containers:
+        - name: svc-00-container-0
+          image: registry.example.com/svc-00:0.0.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8000
+              protocol: TCP
+          env:
+            - name: LOG_LEVEL
+              value: info
+            - name: MAX_WORKERS
+              value: "2"
+            - name: REGION
+              value: us-east-1
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: svc-01
+  namespace: team-1
+  labels:
+    app: svc-01
+    tier: frontend
+    managed-by: platform
+  annotations:
+    config.example.com/checksum: "9e3779b1"
+    config.example.com/owner: team-1@example.com
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: svc-01
+  template:
+    metadata:
+      labels:
+        app: svc-01
+        version: v1.3.7
+    spec:
+      containers:
+        - name: svc-01-container-0
+          image: registry.example.com/svc-01:1.0.1
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8011
+              protocol: TCP
+          env:
+            - name: LOG_LEVEL
+              value: debug
+            - name: MAX_WORKERS
+              value: "3"
+            - name: REGION
+              value: eu-west-1
+          resources:
+            requests:
+              cpu: 125m
+              memory: 160Mi
+            limits:
+              cpu: 550m
+              memory: 576Mi
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8011
+            initialDelaySeconds: 6
+            periodSeconds: 10
+        - name: svc-01-container-1
+          image: registry.example.com/svc-01:1.1.2
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8012
+              protocol: TCP
+          env:
+            - name: LOG_LEVEL
+              value: debug
+            - name: MAX_WORKERS
+              value: "3"
+            - name: REGION
+              value: eu-west-1
+          resources:
+            requests:
+              cpu: 125m
+              memory: 160Mi
+            limits:
+              cpu: 550m
+              memory: 576Mi
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8012
+            initialDelaySeconds: 6
+            periodSeconds: 10
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: svc-02
+  namespace: team-2
+  labels:
+    app: svc-02
+    tier: backend
+    managed-by: platform
+  annotations:
+    config.example.com/checksum: "13c6ef362"
+    config.example.com/owner: team-2@example.com
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: svc-02
+  template:
+    metadata:
+      labels:
+        app: svc-02
+        version: v2.6.4
+    spec:
+      containers:
+        - name: svc-02-container-0
+          image: registry.example.com/svc-02:2.0.2
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8022
+              protocol: TCP
+          env:
+            - name: LOG_LEVEL
+              value: info
+            - name: MAX_WORKERS
+              value: "4"
+            - name: REGION
+              value: us-east-1
+          resources:
+            requests:
+              cpu: 150m
+              memory: 192Mi
+            limits:
+              cpu: 600m
+              memory: 640Mi
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8022
+            initialDelaySeconds: 7
+            periodSeconds: 10
+        - name: svc-02-container-1
+          image: registry.example.com/svc-02:2.1.3
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8023
+              protocol: TCP
+          env:
+            - name: LOG_LEVEL
+              value: info
+            - name: MAX_WORKERS
+              value: "4"
+            - name: REGION
+              value: us-east-1
+          resources:
+            requests:
+              cpu: 150m
+              memory: 192Mi
+            limits:
+              cpu: 600m
+              memory: 640Mi
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8023
+            initialDelaySeconds: 7
+            periodSeconds: 10
+        - name: svc-02-container-2
+          image: registry.example.com/svc-02:2.2.4
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8024
+              protocol: TCP
+          env:
+            - name: LOG_LEVEL
+              value: info
+            - name: MAX_WORKERS
+              value: "4"
+            - name: REGION
+              value: us-east-1
+          resources:
+            requests:
+              cpu: 150m
+              memory: 192Mi
+            limits:
+              cpu: 600m
+              memory: 640Mi
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8024
+            initialDelaySeconds: 7
+            periodSeconds: 10
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: svc-03
+  namespace: team-0
+  labels:
+    app: svc-03
+    tier: frontend
+    managed-by: platform
+  annotations:
+    config.example.com/checksum: "1daa66d13"
+    config.example.com/owner: team-0@example.com
+spec:
+  replicas: 4
+  selector:
+    matchLabels:
+      app: svc-03
+  template:
+    metadata:
+      labels:
+        app: svc-03
+        version: v3.9.1
+    spec:
+      containers:
+        - name: svc-03-container-0
+          image: registry.example.com/svc-03:3.0.3
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8033
+              protocol: TCP
+          env:
+            - name: LOG_LEVEL
+              value: debug
+            - name: MAX_WORKERS
+              value: "5"
+            - name: REGION
+              value: eu-west-1
+          resources:
+            requests:
+              cpu: 175m
+              memory: 224Mi
+            limits:
+              cpu: 650m
+              memory: 704Mi
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8033
+            initialDelaySeconds: 8
+            periodSeconds: 10
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: svc-04
+  namespace: team-1
+  labels:
+    app: svc-04
+    tier: backend
+    managed-by: platform
+  annotations:
+    config.example.com/checksum: "278dde6c4"
+    config.example.com/owner: team-1@example.com
+spec:
+  replicas: 5
+  selector:
+    matchLabels:
+      app: svc-04
+  template:
+    metadata:
+      labels:
+        app: svc-04
+        version: v0.2.8
+    spec:
+      containers:
+        - name: svc-04-container-0
+          image: registry.example.com/svc-04:0.0.4
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8044
+              protocol: TCP
+          env:
+            - name: LOG_LEVEL
+              value: info
+            - name: MAX_WORKERS
+              value: "6"
+            - name: REGION
+              value: us-east-1
+          resources:
+            requests:
+              cpu: 200m
+              memory: 256Mi
+            limits:
+              cpu: 700m
+              memory: 768Mi
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8044
+            initialDelaySeconds: 9
+            periodSeconds: 10
+        - name: svc-04-container-1
+          image: registry.example.com/svc-04:0.1.5
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8045
+              protocol: TCP
+          env:
+            - name: LOG_LEVEL
+              value: info
+            - name: MAX_WORKERS
+              value: "6"
+            - name: REGION
+              value: us-east-1
+          resources:
+            requests:
+              cpu: 200m
+              memory: 256Mi
+            limits:
+              cpu: 700m
+              memory: 768Mi
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8045
+            initialDelaySeconds: 9
+            periodSeconds: 10
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: svc-05
+  namespace: team-2
+  labels:
+    app: svc-05
+    tier: frontend
+    managed-by: platform
+  annotations:
+    config.example.com/checksum: "317156075"
+    config.example.com/owner: team-2@example.com
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: svc-05
+  template:
+    metadata:
+      labels:
+        app: svc-05
+        version: v1.5.5
+    spec:
+      containers:
+        - name: svc-05-container-0
+          image: registry.example.com/svc-05:1.0.5
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8055
+              protocol: TCP
+          env:
+            - name: LOG_LEVEL
+              value: debug
+            - name: MAX_WORKERS
+              value: "7"
+            - name: REGION
+              value: eu-west-1
+          resources:
+            requests:
+              cpu: 225m
+              memory: 288Mi
+            limits:
+              cpu: 750m
+              memory: 832Mi
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8055
+            initialDelaySeconds: 10
+            periodSeconds: 10
+        - name: svc-05-container-1
+          image: registry.example.com/svc-05:1.1.6
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8056
+              protocol: TCP
+          env:
+            - name: LOG_LEVEL
+              value: debug
+            - name: MAX_WORKERS
+              value: "7"
+            - name: REGION
+              value: eu-west-1
+          resources:
+            requests:
+              cpu: 225m
+              memory: 288Mi
+            limits:
+              cpu: 750m
+              memory: 832Mi
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8056
+            initialDelaySeconds: 10
+            periodSeconds: 10
+        - name: svc-05-container-2
+          image: registry.example.com/svc-05:1.2.7
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8057
+              protocol: TCP
+          env:
+            - name: LOG_LEVEL
+              value: debug
+            - name: MAX_WORKERS
+              value: "7"
+            - name: REGION
+              value: eu-west-1
+          resources:
+            requests:
+              cpu: 225m
+              memory: 288Mi
+            limits:
+              cpu: 750m
+              memory: 832Mi
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8057
+            initialDelaySeconds: 10
+            periodSeconds: 10
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: svc-06
+  namespace: team-0
+  labels:
+    app: svc-06
+    tier: backend
+    managed-by: platform
+  annotations:
+    config.example.com/checksum: "3b54cda26"
+    config.example.com/owner: team-0@example.com
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: svc-06
+  template:
+    metadata:
+      labels:
+        app: svc-06
+        version: v2.8.2
+    spec:
+      containers:
+        - name: svc-06-container-0
+          image: registry.example.com/svc-06:2.0.6
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8066
+              protocol: TCP
+          env:
+            - name: LOG_LEVEL
+              value: info
+            - name: MAX_WORKERS
+              value: "8"
+            - name: REGION
+              value: us-east-1
+          resources:
+            requests:
+              cpu: 250m
+              memory: 320Mi
+            limits:
+              cpu: 800m
+              memory: 896Mi
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8066
+            initialDelaySeconds: 11
+            periodSeconds: 10
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: svc-07
+  namespace: team-1
+  labels:
+    app: svc-07
+    tier: frontend
+    managed-by: platform
+  annotations:
+    config.example.com/checksum: "4538453d7"
+    config.example.com/owner: team-1@example.com
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: svc-07
+  template:
+    metadata:
+      labels:
+        app: svc-07
+        version: v3.1.9
+    spec:
+      containers:
+        - name: svc-07-container-0
+          image: registry.example.com/svc-07:3.0.7
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8077
+              protocol: TCP
+          env:
+            - name: LOG_LEVEL
+              value: debug
+            - name: MAX_WORKERS
+              value: "9"
+            - name: REGION
+              value: eu-west-1
+          resources:
+            requests:
+              cpu: 275m
+              memory: 352Mi
+            limits:
+              cpu: 850m
+              memory: 960Mi
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8077
+            initialDelaySeconds: 12
+            periodSeconds: 10
+        - name: svc-07-container-1
+          image: registry.example.com/svc-07:3.1.8
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8078
+              protocol: TCP
+          env:
+            - name: LOG_LEVEL
+              value: debug
+            - name: MAX_WORKERS
+              value: "9"
+            - name: REGION
+              value: eu-west-1
+          resources:
+            requests:
+              cpu: 275m
+              memory: 352Mi
+            limits:
+              cpu: 850m
+              memory: 960Mi
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8078
+            initialDelaySeconds: 12
+            periodSeconds: 10
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: svc-08
+  namespace: team-2
+  labels:
+    app: svc-08
+    tier: backend
+    managed-by: platform
+  annotations:
+    config.example.com/checksum: "4f1bbcd88"
+    config.example.com/owner: team-2@example.com
+spec:
+  replicas: 4
+  selector:
+    matchLabels:
+      app: svc-08
+  template:
+    metadata:
+      labels:
+        app: svc-08
+        version: v0.4.6
+    spec:
+      containers:
+        - name: svc-08-container-0
+          image: registry.example.com/svc-08:0.0.8
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8088
+              protocol: TCP
+          env:
+            - name: LOG_LEVEL
+              value: info
+            - name: MAX_WORKERS
+              value: "2"
+            - name: REGION
+              value: us-east-1
+          resources:
+            requests:
+              cpu: 300m
+              memory: 384Mi
+            limits:
+              cpu: 900m
+              memory: 1024Mi
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8088
+            initialDelaySeconds: 13
+            periodSeconds: 10
+        - name: svc-08-container-1
+          image: registry.example.com/svc-08:0.1.9
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8089
+              protocol: TCP
+          env:
+            - name: LOG_LEVEL
+              value: info
+            - name: MAX_WORKERS
+              value: "2"
+            - name: REGION
+              value: us-east-1
+          resources:
+            requests:
+              cpu: 300m
+              memory: 384Mi
+            limits:
+              cpu: 900m
+              memory: 1024Mi
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8089
+            initialDelaySeconds: 13
+            periodSeconds: 10
+        - name: svc-08-container-2
+          image: registry.example.com/svc-08:0.2.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8090
+              protocol: TCP
+          env:
+            - name: LOG_LEVEL
+              value: info
+            - name: MAX_WORKERS
+              value: "2"
+            - name: REGION
+              value: us-east-1
+          resources:
+            requests:
+              cpu: 300m
+              memory: 384Mi
+            limits:
+              cpu: 900m
+              memory: 1024Mi
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8090
+            initialDelaySeconds: 13
+            periodSeconds: 10
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: svc-09
+  namespace: team-0
+  labels:
+    app: svc-09
+    tier: frontend
+    managed-by: platform
+  annotations:
+    config.example.com/checksum: "58ff34739"
+    config.example.com/owner: team-0@example.com
+spec:
+  replicas: 5
+  selector:
+    matchLabels:
+      app: svc-09
+  template:
+    metadata:
+      labels:
+        app: svc-09
+        version: v1.7.3
+    spec:
+      containers:
+        - name: svc-09-container-0
+          image: registry.example.com/svc-09:1.0.9
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8099
+              protocol: TCP
+          env:
+            - name: LOG_LEVEL
+              value: debug
+            - name: MAX_WORKERS
+              value: "3"
+            - name: REGION
+              value: eu-west-1
+          resources:
+            requests:
+              cpu: 325m
+              memory: 416Mi
+            limits:
+              cpu: 950m
+              memory: 1088Mi
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8099
+            initialDelaySeconds: 14
+            periodSeconds: 10
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: svc-10
+  namespace: team-1
+  labels:
+    app: svc-10
+    tier: backend
+    managed-by: platform
+  annotations:
+    config.example.com/checksum: "62e2ac0ea"
+    config.example.com/owner: team-1@example.com
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: svc-10
+  template:
+    metadata:
+      labels:
+        app: svc-10
+        version: v2.0.0
+    spec:
+      containers:
+        - name: svc-10-container-0
+          image: registry.example.com/svc-10:2.0.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8110
+              protocol: TCP
+          env:
+            - name: LOG_LEVEL
+              value: info
+            - name: MAX_WORKERS
+              value: "4"
+            - name: REGION
+              value: us-east-1
+          resources:
+            requests:
+              cpu: 350m
+              memory: 448Mi
+            limits:
+              cpu: 1000m
+              memory: 1152Mi
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8110
+            initialDelaySeconds: 5
+            periodSeconds: 10
+        - name: svc-10-container-1
+          image: registry.example.com/svc-10:2.1.1
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8111
+              protocol: TCP
+          env:
+            - name: LOG_LEVEL
+              value: info
+            - name: MAX_WORKERS
+              value: "4"
+            - name: REGION
+              value: us-east-1
+          resources:
+            requests:
+              cpu: 350m
+              memory: 448Mi
+            limits:
+              cpu: 1000m
+              memory: 1152Mi
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8111
+            initialDelaySeconds: 5
+            periodSeconds: 10
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: svc-11
+  namespace: team-2
+  labels:
+    app: svc-11
+    tier: frontend
+    managed-by: platform
+  annotations:
+    config.example.com/checksum: "6cc623a9b"
+    config.example.com/owner: team-2@example.com
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: svc-11
+  template:
+    metadata:
+      labels:
+        app: svc-11
+        version: v3.3.7
+    spec:
+      containers:
+        - name: svc-11-container-0
+          image: registry.example.com/svc-11:3.0.1
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8121
+              protocol: TCP
+          env:
+            - name: LOG_LEVEL
+              value: debug
+            - name: MAX_WORKERS
+              value: "5"
+            - name: REGION
+              value: eu-west-1
+          resources:
+            requests:
+              cpu: 375m
+              memory: 480Mi
+            limits:
+              cpu: 1050m
+              memory: 1216Mi
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8121
+            initialDelaySeconds: 6
+            periodSeconds: 10
+        - name: svc-11-container-1
+          image: registry.example.com/svc-11:3.1.2
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8122
+              protocol: TCP
+          env:
+            - name: LOG_LEVEL
+              value: debug
+            - name: MAX_WORKERS
+              value: "5"
+            - name: REGION
+              value: eu-west-1
+          resources:
+            requests:
+              cpu: 375m
+              memory: 480Mi
+            limits:
+              cpu: 1050m
+              memory: 1216Mi
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8122
+            initialDelaySeconds: 6
+            periodSeconds: 10
+        - name: svc-11-container-2
+          image: registry.example.com/svc-11:3.2.3
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8123
+              protocol: TCP
+          env:
+            - name: LOG_LEVEL
+              value: debug
+            - name: MAX_WORKERS
+              value: "5"
+            - name: REGION
+              value: eu-west-1
+          resources:
+            requests:
+              cpu: 375m
+              memory: 480Mi
+            limits:
+              cpu: 1050m
+              memory: 1216Mi
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8123
+            initialDelaySeconds: 6
+            periodSeconds: 10
