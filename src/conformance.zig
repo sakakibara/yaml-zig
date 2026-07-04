@@ -351,10 +351,13 @@ fn openCorpus(io: Io) !Io.Dir {
 fn readCaseFile(io: Io, a: std.mem.Allocator, dir: Io.Dir, id: []const u8, name: []const u8) !?[]u8 {
     var case_dir = dir.openDir(io, id, .{}) catch return null;
     defer case_dir.close(io);
-    const raw = case_dir.readFileAlloc(io, name, a, .limited(max_fixture_bytes)) catch |err| switch (err) {
+    const bytes = case_dir.readFileAlloc(io, name, a, .limited(max_fixture_bytes)) catch |err| switch (err) {
         error.FileNotFound => return null,
         else => return err,
     };
+    // Fixtures are canonical-LF text vectors; drop CR so a CRLF checkout
+    // (e.g. git autocrlf on Windows) can't corrupt the byte-exact comparisons.
+    const raw = try stripCr(a, bytes);
     // `in.yaml` files carry the suite's visible-whitespace glyphs; decode
     // them to the bytes a parser must actually see. `test.event` and the
     // other expectation files are already in plain bytes.
@@ -426,6 +429,21 @@ fn decodeGlyphs(a: std.mem.Allocator, raw: []const u8) ![]u8 {
         try out.append(a, raw[i]);
         i += 1;
     }
+    return out.toOwnedSlice(a);
+}
+
+/// Drop CR bytes so a fixture loads in its canonical LF form regardless of the
+/// platform's git line-ending policy; a CRLF checkout (Windows autocrlf) would
+/// otherwise break the byte-exact comparisons. The suite encodes any significant
+/// carriage return as a glyph decoded above, so a literal CR is never content.
+fn stripCr(a: std.mem.Allocator, raw: []u8) ![]u8 {
+    if (std.mem.indexOfScalar(u8, raw, '\r') == null) return raw;
+    var out: std.ArrayList(u8) = .empty;
+    try out.ensureTotalCapacity(a, raw.len);
+    for (raw) |b| {
+        if (b != '\r') try out.append(a, b);
+    }
+    a.free(raw);
     return out.toOwnedSlice(a);
 }
 
