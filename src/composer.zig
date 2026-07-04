@@ -384,7 +384,7 @@ pub const Composer = struct {
         try self.stack.append(self.arena, f);
     }
 
-    // --- Span path maintenance --------------------------------------------
+    // Span path maintenance
     //
     // A node's path segment is decided by its parent frame at the moment the
     // node begins: a sequence element gets `[index]`, a mapping VALUE gets
@@ -494,7 +494,7 @@ pub const Composer = struct {
         }
     }
 
-    // --- Anchors, aliases, merge keys -------------------------------------
+    // Anchors, aliases, merge keys
 
     /// Record a fully-composed node under its anchor name. A later
     /// re-definition of the same name overrides the earlier one, so
@@ -642,7 +642,7 @@ pub const Composer = struct {
         }
     }
 
-    // --- Scalar cooking + resolution --------------------------------------
+    // Scalar cooking + resolution
 
     pub fn composeScalar(self: *Composer, ev: Event) Error!Value {
         // A block scalar whose first content line is less indented than a
@@ -1146,7 +1146,7 @@ fn stripIndent(line: []const u8, indent: usize) []const u8 {
     return line[n..];
 }
 
-// --- Tag classification ---------------------------------------------------
+// Tag classification
 
 const Typed = enum { int, float, bool, null };
 
@@ -1206,7 +1206,7 @@ pub fn parseStreamReader(arena: std.mem.Allocator, reader: *std.Io.Reader, optio
     return parseStream(arena, input, options);
 }
 
-// --- Tests ----------------------------------------------------------------
+// Tests
 
 const testing = std.testing;
 

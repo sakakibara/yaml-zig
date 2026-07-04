@@ -175,7 +175,7 @@ fn policyReason(id: []const u8) ?Reason {
     return null;
 }
 
-// --- Event serializer (the conformance contract) --------------------------
+// Event serializer (the conformance contract)
 
 /// Serialize the parser's event stream for `src` into the suite's
 /// `test.event` text. Returns null when parsing fails before the stream
@@ -324,7 +324,7 @@ fn writeScalarValue(w: *Io.Writer, value: []const u8) !void {
     };
 }
 
-// --- Parse helpers --------------------------------------------------------
+// Parse helpers
 
 /// True when `src` parses cleanly into zero or more documents. Parse
 /// failures map to false; OutOfMemory propagates as a real test error.
@@ -341,7 +341,7 @@ fn parses(src: []const u8) !bool {
     return true;
 }
 
-// --- Corpus walking -------------------------------------------------------
+// Corpus walking
 
 fn openCorpus(io: Io) !Io.Dir {
     const path = conformance_options.corpus_path ++ "/yaml-test-suite";
@@ -454,7 +454,7 @@ fn hasCaseFile(io: Io, dir: Io.Dir, id: []const u8, name: []const u8) bool {
     return true;
 }
 
-// --- Tests ----------------------------------------------------------------
+// Tests
 
 test "yaml-test-suite: corpus totals are pinned" {
     const io = testing.io;
@@ -569,7 +569,7 @@ test "yaml-test-suite: every non-error case is classified" {
     try testing.expectEqual(expected_input_only, input_only);
 }
 
-// --- Emitter round-trip (parse -> emit -> parse) --------------------------
+// Emitter round-trip (parse -> emit -> parse)
 //
 // The event-stream tests above validate the PARSER. This test validates the
 // EMITTER's round-trip safety against the full breadth of real YAML: every
@@ -689,7 +689,7 @@ test "yaml-test-suite: parse -> emit -> parse round-trip preserves Values" {
     try testing.expectEqual(expected_roundtrip_skip, skipped);
 }
 
-// --- Document-model byte-identity round-trip --------------------------------
+// Document-model byte-identity round-trip
 //
 // The lossless document model (`yaml.Document`) keeps the source bytes and a
 // byte-range node tree; `emit` on an UNMODIFIED document writes the duped

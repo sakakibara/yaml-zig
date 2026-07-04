@@ -1006,7 +1006,7 @@ pub const Scanner = struct {
         }
     }
 
-    // --- Flow context -----------------------------------------------------
+    // Flow context
 
     /// Dispatch one token while inside a flow collection. The structural
     /// flow bytes are handled here; everything else (scalars, quoted,
@@ -1167,7 +1167,7 @@ pub const Scanner = struct {
         self.advance(); // consume ':'
     }
 
-    // --- Quoted scalars ----------------------------------------------------
+    // Quoted scalars
 
     /// Single- or double-quoted scalar. The span covers the inner content
     /// only (between the quotes); the composer unescapes. Unterminated ->
@@ -1249,7 +1249,7 @@ pub const Scanner = struct {
         self.emitNodeWithOptionalKey(node, node_col);
     }
 
-    // --- Block scalars -----------------------------------------------------
+    // Block scalars
 
     /// Literal (`|`) or folded (`>`) block scalar. Parses the header
     /// (chomping `+`/`-` and an optional explicit indent digit, in either
@@ -1414,7 +1414,7 @@ pub const Scanner = struct {
         } });
     }
 
-    // --- Node properties: anchors, aliases, tags ---------------------------
+    // Node properties: anchors, aliases, tags
 
     /// `&name` (anchor) or `*name` (alias). The span covers the NAME only
     /// (excluding the sigil) so the consumer can slice it directly. A name
@@ -1511,7 +1511,7 @@ pub const Scanner = struct {
         } });
     }
 
-    // --- Documents and directives ------------------------------------------
+    // Documents and directives
 
     /// At column 0, classify a `---`/`...` marker line. Returns the marker
     /// kind when the three bytes are present and followed by a blank or end
@@ -2042,7 +2042,7 @@ fn firstScalar(src: []const u8) ?Token {
     return null;
 }
 
-// --- Carried-forward correctness fixes ---
+// Carried-forward correctness fixes
 
 test "tab used as indentation is invalid" {
     var buf: [16]TokenKind = undefined;
@@ -2077,7 +2077,7 @@ test "CRLF carriage return is excluded from scalar spans" {
     try std.testing.expectEqualStrings("2", scalars[3]);
 }
 
-// --- New scalar styles, properties, flow, documents, directives ---
+// New scalar styles, properties, flow, documents, directives
 
 test "double and single quoted scalars carry style" {
     const tok = firstScalar("'it''s'\n").?;
@@ -2219,7 +2219,7 @@ test "document start closes open block collections" {
     try std.testing.expect(be < ds);
 }
 
-// --- CRLF indicator recognition ---
+// CRLF indicator recognition
 
 test "CRLF nested mapping: colon before CR is a value indicator" {
     // c:\r\n  d: 3\r\n must produce the same token sequence as its LF form.
@@ -2262,7 +2262,7 @@ test "CRLF: dash before digit is not a block entry" {
     try std.testing.expect(std.mem.indexOfScalar(TokenKind, buf[0..n], .scalar) != null);
 }
 
-// --- Explicit block-mapping keys (? key / : value) ---
+// Explicit block-mapping keys (? key / : value)
 
 test "block sequence at the mapping key's indent opens a sequence" {
     // `one:\n- a\n- b\ntwo: 2` -- the sequence value sits at the key column;
@@ -2383,7 +2383,7 @@ test "explicit ? key in flow emits a single key, not a doubled one" {
     }, buf[0..n]);
 }
 
-// --- Deferred simple keys: flow collection as a block-mapping key ---
+// Deferred simple keys: flow collection as a block-mapping key
 
 /// Drive a scanner to stream end, asserting it terminates within `cap`
 /// tokens. The cap turns a regressed unbounded candidate-buffering loop into

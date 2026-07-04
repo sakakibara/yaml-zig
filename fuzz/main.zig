@@ -403,7 +403,7 @@ fn printEscaped(input: []const u8) void {
     std.debug.print("\"", .{});
 }
 
-// --- Stream arm (invariant 3) ---------------------------------------------
+// Stream arm (invariant 3)
 
 const StreamArmError = error{
     /// ValueStream succeeded (returned documents) but parseStream failed.

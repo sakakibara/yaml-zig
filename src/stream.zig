@@ -639,7 +639,7 @@ fn mapParserError(e: parser.Error) StreamError {
     };
 }
 
-// --- Tests ----------------------------------------------------------------
+// Tests
 
 const testing = std.testing;
 
@@ -756,7 +756,7 @@ fn expectSnapshotsEqual(want: []const EvSnapshot, got: []const EvSnapshot) !void
     }
 }
 
-// --- Gate A: empty / whitespace-only input --------------------------------
+// Gate A: empty / whitespace-only input
 
 test "empty reader yields stream_start then stream_end then null" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
@@ -770,7 +770,7 @@ test "empty reader yields stream_start then stream_end then null" {
     }
 }
 
-// --- Gate B: cross-check vs the buffered parser ---------------------------
+// Gate B: cross-check vs the buffered parser
 
 const cross_check_cases = [_][]const u8{
     "scalar\n",
@@ -818,7 +818,7 @@ test "streaming events match buffered parser over the same bytes" {
     }
 }
 
-// --- Gate C: chunk-boundary framing equivalence ---------------------------
+// Gate C: chunk-boundary framing equivalence
 
 const chunk_cases = [_][]const u8{
     "---\na: 1\n---\nb: 2\n---\nc: 3\n",
@@ -922,7 +922,7 @@ test "chunk-boundary equivalence matches buffered parser too" {
     }
 }
 
-// --- Gate D: 3-document framing + base advancing --------------------------
+// Gate D: 3-document framing + base advancing
 
 test "three-document stream frames document_start/end and advances base" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
@@ -1053,7 +1053,7 @@ test "EventReader: errors are terminal, next() after an error returns null" {
     try testing.expect(er.diagnostic() != null);
 }
 
-// --- Gate E: ValueStream and materialize ----------------------------------
+// Gate E: ValueStream and materialize
 
 test "ValueStream: single scalar document" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);

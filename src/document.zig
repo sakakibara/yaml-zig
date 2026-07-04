@@ -758,7 +758,7 @@ pub const Document = struct {
     }
 };
 
-// ----- node-tree construction -----
+// Node-tree construction
 //
 // The tree is built by driving the comment-aware scanner and consuming its
 // structural token stream with a recursive descent that mirrors the parser's
@@ -1178,7 +1178,7 @@ fn makeScalarNode(arena: Allocator, src: []const u8, t: Token) Error!*Node {
     return node;
 }
 
-// ----- edit value rendering -----
+// Edit value rendering
 
 /// Render a scalar `Value` to its YAML bytes via the emitter, so the quoting
 /// is identical to `emit`. Collections are out of scope for scalar edits.
@@ -1223,7 +1223,7 @@ fn valueFromAny(arena: Allocator, comptime T: type, value: T) Error!Value {
     };
 }
 
-// ----- tests -----
+// Tests
 
 test "Span2 offsets are usize (no 4 GiB cap)" {
     try std.testing.expectEqual(@sizeOf(usize), @sizeOf(@FieldType(Span2, "start")));
@@ -1956,7 +1956,7 @@ fn emitToString(a: Allocator, doc: *const Document) ![]const u8 {
     return a.dupe(u8, aw.written());
 }
 
-// ----- H2: set over a quoted/block scalar splices the whole presentation -----
+// H2: set over a quoted/block scalar splices the whole presentation
 
 test "set over a double-quoted scalar replaces the quotes too" {
     var ar = std.heap.ArenaAllocator.init(std.testing.allocator);
@@ -2003,7 +2003,7 @@ test "set over an unquoted plain scalar still works (control)" {
     try std.testing.expectEqualStrings("port: 9090\n", try emitToString(a, &doc));
 }
 
-// ----- H3: setTrailingComment on a quoted scalar keeps the closing quote -----
+// H3: setTrailingComment on a quoted scalar keeps the closing quote
 
 test "setTrailingComment on a double-quoted scalar keeps the closing quote" {
     var ar = std.heap.ArenaAllocator.init(std.testing.allocator);
@@ -2031,7 +2031,7 @@ test "setTrailingComment on a plain scalar (control)" {
     try std.testing.expectEqualStrings("a: hello # C\nb: 2\n", try emitToString(a, &doc));
 }
 
-// ----- H4: set / setTrailingComment on an empty mapping value -----
+// H4: set / setTrailingComment on an empty mapping value
 
 test "set on an empty mapping value renders after the colon" {
     var ar = std.heap.ArenaAllocator.init(std.testing.allocator);
@@ -2062,7 +2062,7 @@ test "setTrailingComment on an empty mapping value keeps the key intact" {
     try std.testing.expect(doc.get("a").? == .null);
 }
 
-// ----- H4: set on empty value with trailing whitespace after colon -----
+// H4: set on empty value with trailing whitespace after colon
 
 test "set on empty value with single space after colon" {
     // `a: \n` -- sep_end lands on the space; value must be inserted after it.
@@ -2125,7 +2125,7 @@ test "setTrailingComment on empty value with space after colon" {
     try std.testing.expectEqualStrings("a: # note\nb: 2\n", try emitToString(a, &doc));
 }
 
-// ----- last-wins for duplicate keys -----
+// Last-wins for duplicate keys
 
 test "duplicate key: read, set, remove target the last occurrence" {
     var ar = std.heap.ArenaAllocator.init(std.testing.allocator);
@@ -2139,7 +2139,7 @@ test "duplicate key: read, set, remove target the last occurrence" {
     try std.testing.expectEqualStrings("a: 1\n", try emitToString(a, &doc));
 }
 
-// ----- invariant: resolveNode content matches Value.get; outer splice no-op -----
+// Invariant: resolveNode content matches Value.get; outer splice no-op
 
 test "invariant: resolve content matches Value.get across quoted/empty/dup keys" {
     var ar = std.heap.ArenaAllocator.init(std.testing.allocator);
@@ -2157,7 +2157,7 @@ test "invariant: resolve content matches Value.get across quoted/empty/dup keys"
     try std.testing.expectEqual(@as(i64, 3), doc.getT(i64, "n.x").?);
 }
 
-// ----- lossless-model corruption regressions -----
+// Lossless-model corruption regressions
 
 test "set on an alias replaces the whole *name, not just the name" {
     var ar = std.heap.ArenaAllocator.init(std.testing.allocator);

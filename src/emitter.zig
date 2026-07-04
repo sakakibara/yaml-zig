@@ -382,7 +382,7 @@ fn emitFloat(w: *Io.Writer, f: f64) EmitError!void {
     try w.writeAll(".0");
 }
 
-// --- String styling -------------------------------------------------------
+// String styling
 
 fn emitString(w: *Io.Writer, s: []const u8) EmitError!void {
     if (plainIsSafe(s)) {
@@ -490,7 +490,7 @@ fn emitDoubleQuoted(w: *Io.Writer, s: []const u8) EmitError!void {
     try w.writeByte('"');
 }
 
-// --- Tests ----------------------------------------------------------------
+// Tests
 
 const parse = @import("composer.zig").parse;
 const parseStream = @import("composer.zig").parseStream;

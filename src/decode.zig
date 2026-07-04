@@ -546,7 +546,7 @@ fn decodeEnum(comptime T: type, value: Value, arena: Allocator, options: compose
     }
 }
 
-// --- Tests ----------------------------------------------------------------
+// Tests
 
 const parse = composer.parse;
 
@@ -1106,7 +1106,7 @@ test "decodeArray: non-empty seq into zero-length array is TypeMismatch" {
 }
 
 
-// ----- streaming typed decode (no Value tree) -----
+// Streaming typed decode (no Value tree)
 
 const parser_mod = @import("parser.zig");
 const diagnostic_mod = @import("diagnostic.zig");

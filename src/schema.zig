@@ -32,7 +32,7 @@ fn asString(arena: std.mem.Allocator, plain: []const u8) std.mem.Allocator.Error
     return .{ .string = try arena.dupe(u8, plain) };
 }
 
-// --- Core schema (tag:yaml.org,2002:{null,bool,int,float}) ----------------
+// Core schema (tag:yaml.org,2002:{null,bool,int,float})
 
 fn resolveCore(arena: std.mem.Allocator, plain: []const u8) std.mem.Allocator.Error!Value {
     if (coreNull(plain)) return .null;
@@ -137,7 +137,7 @@ fn isCoreFloatGrammar(plain: []const u8) bool {
     return i == plain.len;
 }
 
-// --- JSON schema (the JSON data model, strict grammar) --------------------
+// JSON schema (the JSON data model, strict grammar)
 
 fn resolveJson(arena: std.mem.Allocator, plain: []const u8) std.mem.Allocator.Error!Value {
     if (std.mem.eql(u8, plain, "null")) return .null;
@@ -202,7 +202,7 @@ fn parseJsonDigits(plain: []const u8, i: *usize) bool {
     return true;
 }
 
-// --- Tests ----------------------------------------------------------------
+// Tests
 
 fn expectResolve(schema: Schema, plain: []const u8, expected: Value) !void {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
