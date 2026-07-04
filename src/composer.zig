@@ -826,17 +826,16 @@ pub const Composer = struct {
 
         const indent: usize = header.content_indent;
 
-        // Split into lines, stripping the block indentation and a trailing
-        // CR. `over` marks a "more-indented" content line (extra leading
-        // white space survived the strip), which suppresses folding.
+        // Split into lines and strip the block indentation. `over` marks a
+        // "more-indented" content line (extra leading white space survived
+        // the strip), which suppresses folding.
         const Line = struct { text: []const u8, blank: bool, over: bool };
         var lines: std.ArrayList(Line) = .empty;
-        var it = std.mem.splitScalar(u8, body, '\n');
+        var it = LineIterator.init(body);
         while (it.next()) |raw| {
-            const line0 = if (raw.len > 0 and raw[raw.len - 1] == '\r') raw[0 .. raw.len - 1] else raw;
             // After the strip an empty remainder is an empty line; remaining
             // leading white space marks "more-indented" content.
-            const stripped = stripIndent(line0, indent);
+            const stripped = stripIndent(raw, indent);
             const blank = stripped.len == 0;
             const over = !blank and (stripped[0] == ' ' or stripped[0] == '\t');
             try lines.append(self.arena, .{ .text = stripped, .blank = blank, .over = over });
@@ -972,10 +971,40 @@ fn isFlowSpace(c: u8) bool {
     return c == ' ' or c == '\t';
 }
 
-/// Drop a trailing CR so CRLF and LF inputs fold identically.
-fn dropCr(line: []const u8) []const u8 {
-    return if (line.len > 0 and line[line.len - 1] == '\r') line[0 .. line.len - 1] else line;
-}
+/// Splits `buf` on any YAML line break -- `\n`, `\r\n`, or a lone `\r` --
+/// each counting as exactly one boundary (YAML 1.2.2 section 5.4), so a
+/// scalar's folded content is identical however its source line breaks are
+/// styled. Returned lines never include the break bytes. Mirrors
+/// `std.mem.SplitIterator(u8, .scalar)`'s trailing-empty-line semantics: a
+/// buffer ending in a break yields one final empty line.
+const LineIterator = struct {
+    buf: []const u8,
+    pos: ?usize,
+
+    fn init(buf: []const u8) LineIterator {
+        return .{ .buf = buf, .pos = 0 };
+    }
+
+    fn next(self: *LineIterator) ?[]const u8 {
+        const start = self.pos orelse return null;
+        var i = start;
+        while (i < self.buf.len and self.buf[i] != '\n' and self.buf[i] != '\r') i += 1;
+        if (i >= self.buf.len) {
+            self.pos = null;
+        } else if (self.buf[i] == '\r' and i + 1 < self.buf.len and self.buf[i + 1] == '\n') {
+            self.pos = i + 2;
+        } else {
+            self.pos = i + 1;
+        }
+        return self.buf[start..i];
+    }
+
+    fn peek(self: *LineIterator) ?[]const u8 {
+        const saved = self.pos;
+        defer self.pos = saved;
+        return self.next();
+    }
+};
 
 /// Fold the line breaks of a single-quoted flow scalar. A run of N line
 /// breaks between content folds to N-1 line breaks, except a single break
@@ -983,15 +1012,14 @@ fn dropCr(line: []const u8) []const u8 {
 /// white space on each interior line is trimmed. No break in the input is
 /// a fast no-op.
 fn foldFlowBreaks(arena: std.mem.Allocator, raw: []const u8) ![]const u8 {
-    if (std.mem.indexOfScalar(u8, raw, '\n') == null) return raw;
+    if (std.mem.indexOfAny(u8, raw, "\n\r") == null) return raw;
     var out: std.ArrayList(u8) = .empty;
-    var lines = std.mem.splitScalar(u8, raw, '\n');
+    var lines = LineIterator.init(raw);
     var first = true;
     // Breaks accumulated since the last emitted content line: 1 for the
     // line break itself, +1 per intervening blank line.
     var breaks: usize = 0;
-    while (lines.next()) |raw_line| {
-        const line = dropCr(raw_line);
+    while (lines.next()) |line| {
         // The final split element is the line bearing the closing quote: a
         // terminator, not content. When blank it ends the trailing break run
         // without adding a break of its own; when it carries content that
@@ -1048,17 +1076,16 @@ fn appendFoldedBreaks(out: *std.ArrayList(u8), arena: std.mem.Allocator, breaks:
 /// A run of backslashes decides continuation by parity: an odd count ends
 /// in a live `\`, an even count is fully escaped pairs.
 fn foldFlowBreaksDouble(arena: std.mem.Allocator, raw: []const u8) ![]const u8 {
-    if (std.mem.indexOfScalar(u8, raw, '\n') == null) return raw;
+    if (std.mem.indexOfAny(u8, raw, "\n\r") == null) return raw;
     var out: std.ArrayList(u8) = .empty;
-    var lines = std.mem.splitScalar(u8, raw, '\n');
+    var lines = LineIterator.init(raw);
     var first = true;
     // Whether the previous emitted content line ended in a live `\`
     // continuation (its break and the next line's indent are dropped).
     var continued = false;
     // Breaks accumulated since the last emitted content line.
     var breaks: usize = 0;
-    while (lines.next()) |raw_line| {
-        const line = dropCr(raw_line);
+    while (lines.next()) |line| {
         // The final split element bears the closing quote: a terminator, not
         // a content line. When blank it ends the trailing break run without
         // contributing a break of its own.
@@ -1477,6 +1504,66 @@ test "literal and folded block scalars cook correctly" {
     try std.testing.expectEqualStrings("x", strip.getT([]const u8, "s").?);
     const keep = try p(a, "s: |+\n  x\n\n");
     try std.testing.expectEqualStrings("x\n\n", keep.getT([]const u8, "s").?);
+}
+
+test "line breaks: CRLF and lone CR normalize to LF (YAML 1.2.2 section 5.4)" {
+    var ar = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer ar.deinit();
+    const a = ar.allocator();
+
+    // Plain multi-line scalar: folds to spaces regardless of break style.
+    {
+        const lf = try p(a, "key: line one\n  line two\n  line three\n");
+        const crlf = try p(a, "key: line one\r\n  line two\r\n  line three\r\n");
+        const cr = try p(a, "key: line one\r  line two\r  line three\r");
+        try std.testing.expectEqualStrings("line one line two line three", lf.getT([]const u8, "key").?);
+        try std.testing.expectEqualStrings(lf.getT([]const u8, "key").?, crlf.getT([]const u8, "key").?);
+        try std.testing.expectEqualStrings(lf.getT([]const u8, "key").?, cr.getT([]const u8, "key").?);
+    }
+
+    // Double-quoted multi-line scalar: same fold rule as plain.
+    {
+        const lf = try p(a, "key: \"line one\n  line two\n  line three\"\n");
+        const crlf = try p(a, "key: \"line one\r\n  line two\r\n  line three\"\r\n");
+        const cr = try p(a, "key: \"line one\r  line two\r  line three\"\r");
+        try std.testing.expectEqualStrings("line one line two line three", lf.getT([]const u8, "key").?);
+        try std.testing.expectEqualStrings(lf.getT([]const u8, "key").?, crlf.getT([]const u8, "key").?);
+        try std.testing.expectEqualStrings(lf.getT([]const u8, "key").?, cr.getT([]const u8, "key").?);
+    }
+
+    // Literal block scalar: line breaks preserved, but as LF, never raw CR.
+    {
+        const lf = try p(a, "key: |\n  line one\n  line two\n  line three\n");
+        const crlf = try p(a, "key: |\r\n  line one\r\n  line two\r\n  line three\r\n");
+        const cr = try p(a, "key: |\r  line one\r  line two\r  line three\r");
+        try std.testing.expectEqualStrings("line one\nline two\nline three\n", lf.getT([]const u8, "key").?);
+        try std.testing.expectEqualStrings(lf.getT([]const u8, "key").?, crlf.getT([]const u8, "key").?);
+        try std.testing.expectEqualStrings(lf.getT([]const u8, "key").?, cr.getT([]const u8, "key").?);
+    }
+
+    // Folded block scalar: same fold rule as literal, plus space-folding.
+    {
+        const lf = try p(a, "key: >\n  line one\n  line two\n  line three\n");
+        const crlf = try p(a, "key: >\r\n  line one\r\n  line two\r\n  line three\r\n");
+        const cr = try p(a, "key: >\r  line one\r  line two\r  line three\r");
+        try std.testing.expectEqualStrings("line one line two line three\n", lf.getT([]const u8, "key").?);
+        try std.testing.expectEqualStrings(lf.getT([]const u8, "key").?, crlf.getT([]const u8, "key").?);
+        try std.testing.expectEqualStrings(lf.getT([]const u8, "key").?, cr.getT([]const u8, "key").?);
+    }
+
+    // Simple mapping/sequence: structure parses identically under all three
+    // line-break styles (a lone CR must still separate mapping entries).
+    {
+        const lf = try p(a, "a: 1\nb: 2\nseq:\n  - x\n  - y\n");
+        const crlf = try p(a, "a: 1\r\nb: 2\r\nseq:\r\n  - x\r\n  - y\r\n");
+        const cr = try p(a, "a: 1\rb: 2\rseq:\r  - x\r  - y\r");
+        for ([_]Value{ lf, crlf, cr }) |v| {
+            try std.testing.expectEqual(@as(i64, 1), v.getT(i64, "a").?);
+            try std.testing.expectEqual(@as(i64, 2), v.getT(i64, "b").?);
+            try std.testing.expectEqualStrings("x", v.getT([]const u8, "seq[0]").?);
+            try std.testing.expectEqualStrings("y", v.getT([]const u8, "seq[1]").?);
+        }
+    }
 }
 
 test "quoted scalars are always strings, never schema-resolved" {

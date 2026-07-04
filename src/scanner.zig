@@ -480,13 +480,29 @@ pub const Scanner = struct {
 
     fn advance(self: *Scanner) void {
         if (self.pos >= self.input.len) return;
-        if (self.input[self.pos] == '\n') {
+        const c = self.input[self.pos];
+        // `\n` and a lone `\r` (not paired with a following `\n`) each end a
+        // line (YAML 1.2.2 section 5.4). The `\r` of a CRLF pair does not:
+        // the paired `\n` performs the increment, so CRLF counts as one line
+        // break rather than two.
+        if (c == '\n' or (c == '\r' and self.peekAt(1) != '\n')) {
             self.line = satAdd(self.line, 1);
             self.col = 0;
         } else {
             self.col = satAdd(self.col, 1);
         }
         self.pos += 1;
+    }
+
+    /// Consume one line break: `\n`, `\r\n`, or a lone `\r`. Shared by callers
+    /// that stop scanning right before a break byte and need to skip past it.
+    fn consumeLineBreak(self: *Scanner) void {
+        if (self.peek() == '\r') {
+            self.advance();
+            if (self.peek() == '\n') self.advance();
+        } else if (self.peek() == '\n') {
+            self.advance();
+        }
     }
 
     fn peek(self: *Scanner) ?u8 {
@@ -730,12 +746,12 @@ pub const Scanner = struct {
             switch (c) {
                 ' ' => self.advance(),
                 '\r' => {
-                    // CRLF carriage return: an insignificant line-break byte.
-                    if (self.peekAt(1) == '\n') {
-                        tab_in_indent = false;
-                        mid_line_tab = false;
-                        at_line_start = true;
-                    }
+                    // A line break: the carriage return of a CRLF pair, or a
+                    // lone CR (YAML 1.2.2 section 5.4). Either way the line
+                    // resets, whether or not a `\n` follows.
+                    tab_in_indent = false;
+                    mid_line_tab = false;
+                    at_line_start = true;
                     self.advance();
                 },
                 '\t' => {
@@ -1277,8 +1293,7 @@ pub const Scanner = struct {
         var saw_space = false;
         var bad_header = false;
         while (self.peek()) |c| {
-            if (c == '\n') break;
-            if (c == '\r' and self.peekAt(1) == '\n') break;
+            if (c == '\n' or c == '\r') break;
             if (c == ' ' or c == '\t') {
                 saw_space = true;
                 self.advance();
@@ -1288,7 +1303,7 @@ pub const Scanner = struct {
                 // A comment (only valid when white space separates it from the
                 // indicators) runs to the end of the line.
                 while (self.peek()) |h| {
-                    if (h == '\n') break;
+                    if (h == '\n' or h == '\r') break;
                     self.advance();
                 }
                 break;
@@ -1298,7 +1313,7 @@ pub const Scanner = struct {
             bad_header = true;
             self.advance();
         }
-        if (self.peek() == '\n') self.advance();
+        self.consumeLineBreak();
 
         if (bad_header) {
             self.enqueue(.{ .kind = .invalid, .invalid_reason = .block_scalar_header, .span = .{
@@ -1339,8 +1354,7 @@ pub const Scanner = struct {
             var sp: u32 = 0;
             while (scan < self.input.len and self.input[scan] == ' ') : (scan += 1) sp += 1;
             const at = if (scan < self.input.len) self.input[scan] else 0;
-            const blank = scan >= self.input.len or at == '\n' or
-                (at == '\r' and scan + 1 < self.input.len and self.input[scan + 1] == '\n');
+            const blank = scan >= self.input.len or at == '\n' or at == '\r';
             // A document marker at column 0 terminates the body even when the
             // parent is the stream level (where indent 0 would otherwise be a
             // content line).
@@ -1361,9 +1375,15 @@ pub const Scanner = struct {
             } else if (detected == null) {
                 detected = sp;
             }
-            // Advance to the next line.
-            while (scan < self.input.len and self.input[scan] != '\n') scan += 1;
-            if (scan < self.input.len) scan += 1; // consume the '\n'
+            // Advance to the next line, past its line break: `\n`, `\r\n`,
+            // or a lone `\r`.
+            while (scan < self.input.len and self.input[scan] != '\n' and self.input[scan] != '\r') scan += 1;
+            if (scan < self.input.len) {
+                scan += if (self.input[scan] == '\r' and scan + 1 < self.input.len and self.input[scan + 1] == '\n')
+                    2
+                else
+                    1;
+            }
             body_limit = scan;
         }
 
@@ -1534,10 +1554,9 @@ pub const Scanner = struct {
         const start_col = self.col;
         var end = self.pos;
         while (self.peek()) |c| {
-            if (c == '\n') break;
-            if (c == '\r' and self.peekAt(1) == '\n') break;
+            if (c == '\n' or c == '\r') break;
             self.advance();
-            if (c != ' ' and c != '\t' and c != '\r') end = self.pos;
+            if (c != ' ' and c != '\t') end = self.pos;
         }
         self.enqueue(.{ .kind = .directive, .span = .{
             .start = start,
@@ -1572,7 +1591,7 @@ pub const Scanner = struct {
         var end = line.end;
 
         // Fold in continuation lines while the structural conditions hold.
-        while (self.peek() == '\n' or (self.peek() == '\r' and self.peekAt(1) == '\n')) {
+        while (self.peek() == '\n' or self.peek() == '\r') {
             if (!self.plainContinues(in_flow, min_indent)) break;
             // Consume the line break and the next line's leading blanks, then
             // scan its content; `end` advances to the last non-break byte.
@@ -1632,15 +1651,14 @@ pub const Scanner = struct {
                 end = self.pos;
                 continue;
             }
-            if (c == '\n') break;
-            if (c == '\r' and self.peekAt(1) == '\n') break;
+            if (c == '\n' or c == '\r') break;
             if (c == ':' and (isBlankOrEnd(self.peekAt(1)) or
                 (in_flow and isFlowEnd(self.peekAt(1)))))
                 return .{ .end = end, .stopped_at_colon = true };
             if (c == '#' and (self.pos == line_start or isBlankPrev(self.input, self.pos))) break;
             if (in_flow and isFlowIndicator(c)) break;
             self.advance();
-            if (c != ' ' and c != '\t' and c != '\r') end = self.pos;
+            if (c != ' ' and c != '\t') end = self.pos;
         }
         return .{ .end = end, .stopped_at_colon = false };
     }
@@ -1762,9 +1780,10 @@ const simd_w = 16;
 /// the blanks (` `/`\t`) -- a SUPERSET of the real stop set so SIMD never
 /// skips past a terminator. Including blanks keeps the skipped run free of
 /// trailing-blank bytes, so the caller's `end` (last non-blank offset) equals
-/// the new position after a bulk skip. `\r` covers the CRLF case; flow
-/// indicators are always in the set (harmless to stop on them in block
-/// context, where the per-byte loop just continues). Returns bytes skipped.
+/// the new position after a bulk skip. `\r` covers both CRLF and a lone CR
+/// line break; flow indicators are always in the set (harmless to stop on
+/// them in block context, where the per-byte loop just continues). Returns
+/// bytes skipped.
 fn scanPlainFast(bytes: []const u8) usize {
     var i: usize = 0;
     const nl: @Vector(simd_w, u8) = @splat('\n');
