@@ -33,7 +33,21 @@ const decode_mod = @import("decode.zig");
 pub const Value = value_mod.Value;
 pub const Entry = value_mod.Entry;
 
-pub const EmitOptions = struct { indent: usize = 2 };
+/// `indent` sets the per-level indent width for block-style output.
+///
+/// `sort_keys` (default `false`) emits mapping entries -- and, via
+/// `emitTyped`, struct fields -- in ascending byte-lexicographic key
+/// order, recursively into nested mappings, instead of insertion /
+/// declaration order. Only mappings whose keys are ALL scalar strings are
+/// reordered; a mapping containing any non-string key (including a
+/// seq/map key) is left in insertion order, since a non-string key has no
+/// defined byte-lexicographic position. This is plain byte ordering, not
+/// a YAML or JSON canonicalization scheme. Default output is
+/// byte-for-byte unchanged unless the flag is set.
+pub const EmitOptions = struct {
+    indent: usize = 2,
+    sort_keys: bool = false,
+};
 
 /// Writer failures, plus `NestingTooDeep` when a hand-built `Value` tree
 /// exceeds `max_emit_depth` levels of collection nesting.
@@ -212,7 +226,7 @@ fn emitDocument(w: *Io.Writer, value: Value, options: EmitOptions) EmitError!voi
             if (m.len == 0) {
                 try w.writeAll("{}\n");
             } else if (mapHasComplexKey(m)) {
-                try emitFlow(w, value, 0);
+                try emitFlow(w, value, options, 0);
                 try w.writeByte('\n');
             } else {
                 try emitBlockMap(w, m, options, 0);
@@ -256,11 +270,64 @@ fn mapHasComplexKey(entries: []const Entry) bool {
 
 fn emitBlockMap(w: *Io.Writer, entries: []const Entry, options: EmitOptions, depth: usize) EmitError!void {
     if (depth > max_emit_depth) return error.NestingTooDeep;
+    if (options.sort_keys and allStringKeys(entries)) {
+        var prev: ?SortCursor = null;
+        for (0..entries.len) |_| {
+            const idx = nextSortedIndex(entries, prev);
+            try writeIndent(w, options, depth);
+            try emitKey(w, entries[idx].key);
+            try emitValueAfterMarker(w, entries[idx].value, options, depth);
+            prev = .{ .key = entries[idx].key.string, .idx = idx };
+        }
+        return;
+    }
     for (entries) |e| {
         try writeIndent(w, options, depth);
         try emitKey(w, e.key);
         try emitValueAfterMarker(w, e.value, options, depth);
     }
+}
+
+/// True when every entry's key is a scalar string. `sort_keys` only
+/// reorders such mappings: a non-string key (including a seq/map key,
+/// which already forces flow style via `mapHasComplexKey`) has no defined
+/// byte-lexicographic position, so a mapping containing one keeps
+/// insertion order and never crashes.
+fn allStringKeys(entries: []const Entry) bool {
+    for (entries) |e| {
+        if (e.key != .string) return false;
+    }
+    return true;
+}
+
+/// One entry selected by `nextSortedIndex`, remembered so the next call
+/// can resume the scan past it.
+const SortCursor = struct { key: []const u8, idx: usize };
+
+/// True when `(a_key, a_idx)` sorts strictly before `(b_key, b_idx)`:
+/// byte-lexicographic on the key, original position breaking ties so
+/// entries sharing a duplicate key keep their relative order.
+fn keyIdxLess(a_key: []const u8, a_idx: usize, b_key: []const u8, b_idx: usize) bool {
+    if (!std.mem.eql(u8, a_key, b_key)) return std.mem.lessThan(u8, a_key, b_key);
+    return a_idx < b_idx;
+}
+
+/// Index of the next entry in ascending sorted order after `prev` (or the
+/// first entry, when `prev` is null). Every `entries` key must be
+/// `.string` (checked by the caller via `allStringKeys`). A selection
+/// search over `entries` avoids allocating a sorted copy; O(n^2) across a
+/// full pass, which fits `sort_keys`'s human-scale document target.
+fn nextSortedIndex(entries: []const Entry, prev: ?SortCursor) usize {
+    var best: usize = 0;
+    var found = false;
+    for (entries, 0..) |e, j| {
+        if (prev) |p| if (!keyIdxLess(p.key, p.idx, e.key.string, j)) continue;
+        if (!found or keyIdxLess(e.key.string, j, entries[best].key.string, best)) {
+            best = j;
+            found = true;
+        }
+    }
+    return best;
 }
 
 fn emitBlockSeq(w: *Io.Writer, elems: []const Value, options: EmitOptions, depth: usize) EmitError!void {
@@ -291,7 +358,7 @@ fn emitValueAfterMarker(w: *Io.Writer, v: Value, options: EmitOptions, depth: us
             .map => |m| {
                 // Empty, or complex-keyed (block style impossible) -> flow.
                 if (m.len == 0) try w.writeAll("{}\n") else {
-                    try emitFlow(w, v, depth + 1);
+                    try emitFlow(w, v, options, depth + 1);
                     try w.writeByte('\n');
                 }
             },
@@ -316,31 +383,44 @@ fn emitKey(w: *Io.Writer, key: Value) EmitError!void {
 /// (and their nested values). Strings always double-quote here: flow
 /// context gives plain scalars stricter terminators (`,`, `[`, `]`, `{`,
 /// `}`, `:`), so quoting unconditionally is the conservative round-trip-
-/// safe choice.
-fn emitFlow(w: *Io.Writer, v: Value, depth: usize) EmitError!void {
+/// safe choice. `options.sort_keys` applies the same string-key-only
+/// ordering rule as block style, recursively into nested maps.
+fn emitFlow(w: *Io.Writer, v: Value, options: EmitOptions, depth: usize) EmitError!void {
     if (depth > max_emit_depth) return error.NestingTooDeep;
     switch (v) {
         .seq => |s| {
             try w.writeByte('[');
             for (s, 0..) |elem, i| {
                 if (i > 0) try w.writeAll(", ");
-                try emitFlow(w, elem, depth + 1);
+                try emitFlow(w, elem, options, depth + 1);
             }
             try w.writeByte(']');
         },
         .map => |m| {
             try w.writeByte('{');
-            for (m, 0..) |e, i| {
-                if (i > 0) try w.writeAll(", ");
-                // A flow collection key needs the explicit `? ` indicator;
-                // without it the parser reads `[k]: v` as two entries.
-                switch (e.key) {
-                    .seq, .map => try w.writeAll("? "),
-                    else => {},
+            if (options.sort_keys and allStringKeys(m)) {
+                var prev: ?SortCursor = null;
+                for (0..m.len) |i| {
+                    const idx = nextSortedIndex(m, prev);
+                    if (i > 0) try w.writeAll(", ");
+                    try emitFlow(w, m[idx].key, options, depth + 1);
+                    try w.writeAll(": ");
+                    try emitFlow(w, m[idx].value, options, depth + 1);
+                    prev = .{ .key = m[idx].key.string, .idx = idx };
                 }
-                try emitFlow(w, e.key, depth + 1);
-                try w.writeAll(": ");
-                try emitFlow(w, e.value, depth + 1);
+            } else {
+                for (m, 0..) |e, i| {
+                    if (i > 0) try w.writeAll(", ");
+                    // A flow collection key needs the explicit `? ` indicator;
+                    // without it the parser reads `[k]: v` as two entries.
+                    switch (e.key) {
+                        .seq, .map => try w.writeAll("? "),
+                        else => {},
+                    }
+                    try emitFlow(w, e.key, options, depth + 1);
+                    try w.writeAll(": ");
+                    try emitFlow(w, e.value, options, depth + 1);
+                }
             }
             try w.writeByte('}');
         },
@@ -1000,4 +1080,133 @@ test "literal << key round-trip preserves value" {
         if (e.key == .string and std.mem.eql(u8, e.key.string, "<<")) found_merge_lit = true;
     }
     try std.testing.expect(found_merge_lit);
+}
+
+// sort_keys
+
+test "sort_keys: mapping emitted in sorted order, default keeps insertion" {
+    var ar = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer ar.deinit();
+    const a = ar.allocator();
+    const entries = try a.dupe(Entry, &.{
+        .{ .key = .{ .string = "z" }, .value = .{ .int = 1 } },
+        .{ .key = .{ .string = "a" }, .value = .{ .int = 2 } },
+        .{ .key = .{ .string = "m" }, .value = .{ .int = 3 } },
+    });
+    const v: Value = .{ .map = entries };
+    var aw: std.Io.Writer.Allocating = .init(a);
+    defer aw.deinit();
+    try emit(&aw.writer, v, .{ .sort_keys = true });
+    try std.testing.expectEqualStrings("a: 2\nm: 3\nz: 1\n", aw.written());
+
+    aw.clearRetainingCapacity();
+    try emit(&aw.writer, v, .{});
+    try std.testing.expectEqualStrings("z: 1\na: 2\nm: 3\n", aw.written());
+}
+
+test "sort_keys: recurses into nested mappings" {
+    var ar = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer ar.deinit();
+    const a = ar.allocator();
+    const v = try parse(a, "b:\n  y: 1\n  x: 2\na: 3\n", .{});
+    var aw: std.Io.Writer.Allocating = .init(a);
+    defer aw.deinit();
+    try emit(&aw.writer, v, .{ .sort_keys = true });
+    try std.testing.expectEqualStrings("a: 3\nb:\n  x: 2\n  y: 1\n", aw.written());
+}
+
+test "sort_keys: byte-lexicographic order (uppercase sorts before lowercase)" {
+    var ar = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer ar.deinit();
+    const a = ar.allocator();
+    const v = try parse(a, "b: 1\nA: 2\na: 3\nB: 4\n", .{});
+    var aw: std.Io.Writer.Allocating = .init(a);
+    defer aw.deinit();
+    try emit(&aw.writer, v, .{ .sort_keys = true });
+    // ASCII bytes: 'A'(65) 'B'(66) 'a'(97) 'b'(98). Not JCS/UTF-16 order.
+    try std.testing.expectEqualStrings("A: 2\nB: 4\na: 3\nb: 1\n", aw.written());
+}
+
+test "sort_keys: empty mapping stays {}" {
+    var ar = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer ar.deinit();
+    const a = ar.allocator();
+    var aw: std.Io.Writer.Allocating = .init(a);
+    defer aw.deinit();
+    try emit(&aw.writer, .{ .map = &.{} }, .{ .sort_keys = true });
+    try std.testing.expectEqualStrings("{}\n", aw.written());
+}
+
+test "sort_keys: mapping with a non-string key keeps insertion order" {
+    var ar = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer ar.deinit();
+    const a = ar.allocator();
+    // Boundary case: sorting a non-string (even scalar, e.g. int) key has
+    // no defined byte-lexicographic position, so the mapping is left as-is
+    // rather than sorted or crashed on.
+    const entries = try a.dupe(Entry, &.{
+        .{ .key = .{ .int = 2 }, .value = .{ .string = "b" } },
+        .{ .key = .{ .int = 1 }, .value = .{ .string = "a" } },
+    });
+    const v: Value = .{ .map = entries };
+    var aw: std.Io.Writer.Allocating = .init(a);
+    defer aw.deinit();
+    try emit(&aw.writer, v, .{ .sort_keys = true });
+    try std.testing.expectEqualStrings("2: b\n1: a\n", aw.written());
+}
+
+test "sort_keys: duplicate keys preserve relative order (stable)" {
+    var ar = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer ar.deinit();
+    const a = ar.allocator();
+    const entries = try a.dupe(Entry, &.{
+        .{ .key = .{ .string = "a" }, .value = .{ .int = 1 } },
+        .{ .key = .{ .string = "a" }, .value = .{ .int = 2 } },
+    });
+    const v: Value = .{ .map = entries };
+    var aw: std.Io.Writer.Allocating = .init(a);
+    defer aw.deinit();
+    try emit(&aw.writer, v, .{ .sort_keys = true });
+    try std.testing.expectEqualStrings("a: 1\na: 2\n", aw.written());
+}
+
+test "sort_keys: nested mapping under a complex flow key sorts too" {
+    var ar = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer ar.deinit();
+    const a = ar.allocator();
+    // The outer map has a seq key (non-string -> stays in flow, unsorted);
+    // the inner mapping value has scalar string keys and sorts.
+    const keyseq = try a.dupe(Value, &.{ .{ .int = 1 }, .{ .int = 2 } });
+    const inner = try a.dupe(Entry, &.{
+        .{ .key = .{ .string = "b" }, .value = .{ .int = 1 } },
+        .{ .key = .{ .string = "a" }, .value = .{ .int = 2 } },
+    });
+    const entries = try a.dupe(Entry, &.{.{ .key = .{ .seq = keyseq }, .value = .{ .map = inner } }});
+    const v: Value = .{ .map = entries };
+    var aw: std.Io.Writer.Allocating = .init(a);
+    defer aw.deinit();
+    try emit(&aw.writer, v, .{ .sort_keys = true });
+    try std.testing.expectEqualStrings("{? [1, 2]: {\"a\": 2, \"b\": 1}}\n", aw.written());
+}
+
+test "sort_keys: typed struct fields sorted, honoring rename" {
+    const Inner = struct { yy: u8, xx: u8 };
+    const C = struct {
+        pub const yaml_rename = .{ .zed = "aaa" };
+        zed: u8,
+        bbb: Inner,
+    };
+    var ar = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer ar.deinit();
+    const a = ar.allocator();
+    var aw: std.Io.Writer.Allocating = .init(a);
+    defer aw.deinit();
+    const c: C = .{ .zed = 1, .bbb = .{ .yy = 2, .xx = 3 } };
+    try emitTyped(&aw.writer, c, a, .{ .sort_keys = true });
+    // "aaa" (zed renamed) sorts before "bbb"; inner sorts xx before yy.
+    try std.testing.expectEqualStrings("aaa: 1\nbbb:\n  xx: 3\n  yy: 2\n", aw.written());
+
+    aw.clearRetainingCapacity();
+    try emitTyped(&aw.writer, c, a, .{});
+    try std.testing.expectEqualStrings("aaa: 1\nbbb:\n  yy: 2\n  xx: 3\n", aw.written());
 }

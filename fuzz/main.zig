@@ -240,6 +240,7 @@ const Failure = error{
     EmitFailed,
     ReparseFailed,
     RoundTripMismatch,
+    SortNotStable,
     OutOfMemory,
 };
 
@@ -258,6 +259,7 @@ fn checkInput(a: std.mem.Allocator, random: Random, input: []const u8) Failure!v
     };
 
     if (docs) |values| try checkRoundTrip(a, values);
+    if (docs) |values| try checkSortStable(a, values);
     try checkTypedStream(a, input);
 }
 
@@ -357,6 +359,33 @@ fn checkRoundTrip(a: std.mem.Allocator, values: []const yaml.Value) Failure!void
     for (values, reparsed) |va, vb| {
         if (!valueEql(va, vb)) return error.RoundTripMismatch;
     }
+}
+
+/// `sort_keys` invariant: emitting with it is stable. Re-parsing the
+/// sorted output and re-emitting it with `sort_keys` must yield
+/// byte-for-byte the same YAML, so the key order is deterministic and
+/// idempotent.
+fn checkSortStable(a: std.mem.Allocator, values: []const yaml.Value) Failure!void {
+    var first: std.Io.Writer.Allocating = .init(a);
+    defer first.deinit();
+    yaml.emitStream(&first.writer, values, .{ .sort_keys = true }) catch |err| switch (err) {
+        error.WriteFailed, error.OutOfMemory => return error.OutOfMemory,
+        error.NestingTooDeep, error.UnrepresentableScalar, error.UnrepresentableInt => return error.EmitFailed,
+    };
+
+    const reparsed = yaml.parseStream(a, first.written(), .{
+        .max_depth = max_depth,
+        .max_alias_nodes = max_alias_nodes,
+    }) catch return error.ReparseFailed;
+
+    var second: std.Io.Writer.Allocating = .init(a);
+    defer second.deinit();
+    yaml.emitStream(&second.writer, reparsed, .{ .sort_keys = true }) catch |err| switch (err) {
+        error.WriteFailed, error.OutOfMemory => return error.OutOfMemory,
+        error.NestingTooDeep, error.UnrepresentableScalar, error.UnrepresentableInt => return error.EmitFailed,
+    };
+
+    if (!std.mem.eql(u8, first.written(), second.written())) return error.SortNotStable;
 }
 
 /// Deep structural equality. Floats compared bit-for-bit; mapping key
@@ -481,10 +510,10 @@ fn buildLargeStreamInput(random: Random) []const u8 {
 
     if (random.boolean()) {
         const doc = seed_docs[random.uintLessThan(usize, seed_docs.len)];
-        @memcpy(stream_buf[pos..pos + doc.len], doc);
+        @memcpy(stream_buf[pos .. pos + doc.len], doc);
         pos += doc.len;
         if (pos + 5 <= max_input_bytes) {
-            @memcpy(stream_buf[pos..pos + 5], "\n---\n");
+            @memcpy(stream_buf[pos .. pos + 5], "\n---\n");
             pos += 5;
         }
     }
@@ -505,12 +534,12 @@ fn buildLargeStreamInput(random: Random) []const u8 {
 fn appendBlockBody(pos_in: usize, target: usize, style: u8) usize {
     var pos = pos_in;
     if (pos + 8 > max_input_bytes) return pos;
-    @memcpy(stream_buf[pos..pos + 6], "data: ");
+    @memcpy(stream_buf[pos .. pos + 6], "data: ");
     stream_buf[pos + 6] = style;
     stream_buf[pos + 7] = '\n';
     pos += 8;
     while (pos < target and pos + 64 <= max_input_bytes) {
-        @memcpy(stream_buf[pos..pos + 2], "  ");
+        @memcpy(stream_buf[pos .. pos + 2], "  ");
         @memset(stream_buf[pos + 2 .. pos + 62], 'a');
         stream_buf[pos + 62] = '\n';
         pos += 63;
@@ -523,7 +552,7 @@ fn appendBlockBody(pos_in: usize, target: usize, style: u8) usize {
 fn appendPlainLines(pos_in: usize, target: usize) usize {
     var pos = pos_in;
     while (pos < target and pos + 64 <= max_input_bytes) {
-        @memcpy(stream_buf[pos..pos + 2], "- ");
+        @memcpy(stream_buf[pos .. pos + 2], "- ");
         @memset(stream_buf[pos + 2 .. pos + 62], 'a');
         stream_buf[pos + 62] = '\n';
         pos += 63;

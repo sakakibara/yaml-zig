@@ -6,6 +6,23 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- Line breaks normalize per YAML 1.2.2 section 5.4: a lone `\r` (classic-Mac)
+  and `\r\n` are recognized as one line break everywhere, so CR-only documents
+  parse and CR bytes no longer leak into scalar content. A CRLF-terminated
+  block scalar (`|`/`>`) no longer gains a spurious leading blank line.
+
+### Added
+
+- `EmitOptions.sort_keys`: emit mapping entries (and, via `emitTyped`,
+  struct fields) in ascending byte-lexicographic key order, recursively
+  into nested mappings. Default `false` preserves insertion / declaration
+  order, so existing output is byte-for-byte unchanged unless the flag is
+  set. Only mappings whose keys are all scalar strings are reordered; a
+  mapping with any non-string key keeps insertion order. Byte-lexicographic
+  ordering, not JCS or any other canonicalization scheme.
+
 ## [0.1.1] - 2026-07-05
 
 ### Fixed
