@@ -6,6 +6,15 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-07-05
+
+### Fixed
+
+- 32-bit targets now compile. `u64` span offsets are cast to `usize` at
+  slice-indexing and loop-index sites that failed to build where `usize`
+  is 32-bit (e.g. `wasm32-wasi`). No API or behavior change on 64-bit
+  targets.
+
 ## [0.1.0] - 2026-07-03
 
 Initial release. YAML 1.2.2 parser, typed codec, block emitter, lossless
@@ -88,5 +97,6 @@ document model, reader-backed streaming reader, and tooling.
   runnable examples (`basic`, `typed`, `stream`, `emit`, `spans`, `edit`,
   `event_stream`).
 
-[Unreleased]: https://github.com/sakakibara/yaml-zig/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/sakakibara/yaml-zig/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/sakakibara/yaml-zig/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/sakakibara/yaml-zig/releases/tag/v0.1.0
