@@ -1169,7 +1169,7 @@ fn makeScalarNode(arena: Allocator, src: []const u8, t: Token) Error!*Node {
         // the block leaves the line terminator in place (like a plain scalar,
         // whose span ends before its `\n`).
         .literal, .folded => .{
-            .start = t.block_header.header_start,
+            .start = @intCast(t.block_header.header_start),
             .end = trimTrailingBreak(src, content.end),
         },
     };
