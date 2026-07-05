@@ -6,6 +6,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-07-05
+
 ### Fixed
 
 - Line breaks normalize per YAML 1.2.2 section 5.4: a lone `\r` (classic-Mac)
@@ -114,6 +116,7 @@ document model, reader-backed streaming reader, and tooling.
   runnable examples (`basic`, `typed`, `stream`, `emit`, `spans`, `edit`,
   `event_stream`).
 
-[Unreleased]: https://github.com/sakakibara/yaml-zig/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/sakakibara/yaml-zig/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/sakakibara/yaml-zig/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/sakakibara/yaml-zig/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/sakakibara/yaml-zig/releases/tag/v0.1.0
