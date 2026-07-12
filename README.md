@@ -28,7 +28,7 @@ A YAML 1.2.2 parser, decoder, and emitter for Zig.
 - **Schema selection** - resolve plain scalars under the `failsafe`, `json`,
   or `core` (default) schema.
 - **Conformance, honestly measured** - validated against the
-  [yaml-test-suite](https://github.com/yaml/yaml-test-suite): 291 cases
+  [yaml-test-suite](https://github.com/yaml/yaml-test-suite): 293 cases
   match the reference event stream byte-for-byte, and of 94 error-marked
   cases 82 are correctly rejected (the other 12 are not yet rejected and are
   policy-documented). 309 cases survive a parse -> emit -> parse round-trip.
@@ -563,9 +563,9 @@ vendored under `tests/corpus/yaml-test-suite/` alongside its upstream
 `LICENSE`. Of 405 corpus cases:
 
 ```
-event stream matches reference:   291 cases, byte-for-byte
+event stream matches reference:   293 cases, byte-for-byte
 error cases correctly rejected:    82 of 94 error-marked cases
-policy-documented divergences:     23 cases (incl. 12 not-yet-rejected errors)
+policy-documented divergences:     21 cases (incl. 12 not-yet-rejected errors)
 ```
 
 The primary check is the **event stream**: each input is parsed, its event
@@ -573,7 +573,7 @@ sequence serialized to the suite's `test.event` text format, and required to
 match byte-for-byte. Where the suite also ships an `in.json` projection, the
 composed `Value` is cross-checked against it.
 
-The 23 policy-documented cases are an explicit, pinned list in
+The 21 policy-documented cases are an explicit, pinned list in
 `src/conformance.zig`, each tagged with a reason. The remaining divergences
 cluster into two groups:
 
