@@ -40,7 +40,9 @@
 //! (each segment is a literal key, never re-split on `.` or `[...]`). `set`
 //! / `setValue` / `remove` still take dotted string paths and split them
 //! into segments the same way (`PathIterator`) before doing the same work,
-//! so a dot-free path behaves identically either way.
+//! so a dot-free path behaves identically either way. Unlike `setValue`,
+//! `setValueSegments`/`setSegments` also accept a `.map`/`.seq` value: a
+//! non-empty one nests as a block collection under the target key.
 //!
 //! ```zig
 //! var doc = try yaml.Document.parse(arena, src, .{});
@@ -273,16 +275,41 @@ pub const Document = struct {
     /// Segment-taking twin of `set`. `segments` are literal mapping keys
     /// addressed in order -- never re-split on `.` or `[N]` -- so a key
     /// containing either byte (e.g. `"example.com"`) is addressed
-    /// unambiguously. See `set` for the type-dispatch rules.
+    /// unambiguously. See `set` for the type-dispatch rules; a `Value`
+    /// passed through also gets `setValueSegments`'s container support.
     pub fn setSegments(self: *Document, segments: []const []const u8, value: anytype) Error!void {
         const v = try valueFromAny(self.arena, @TypeOf(value), value);
         return self.setValueSegments(segments, v);
     }
 
-    /// Segment-taking twin of `setValue`.
+    /// Segment-taking twin of `setValue`. Unlike `setValue`, a `.map` or
+    /// `.seq` value is accepted too, not just scalars: a non-empty
+    /// container renders as a nested YAML block collection (via the same
+    /// block emitter `emit` uses), indented one step deeper than the
+    /// target key, and splices in losslessly -- replacing an existing
+    /// key's whole value region, or following a freshly appended/created
+    /// `key:` line. Indentation reuses `inferIndentStep`, the same
+    /// document-sampled step a created intermediate mapping chain uses. An
+    /// empty `.map`/`.seq` renders inline as `{}`/`[]`, identical to how
+    /// `emit` represents an empty collection, and is spliced exactly like
+    /// a scalar. Setting the WHOLE document root (`segments.len == 0`) to
+    /// a container is out of scope and stays `error.InvalidValue`, empty
+    /// or not -- every supported case sets a container as some KEY's value.
     pub fn setValueSegments(self: *Document, segments: []const []const u8, value: Value) Error!void {
-        const raw = try renderScalarValue(self.arena, value);
-        return self.setRawSegments(try segmentsFromKeys(self.arena, segments), raw);
+        switch (value) {
+            .map, .seq => {
+                if (segments.len == 0) return error.InvalidValue;
+                const segs = try segmentsFromKeys(self.arena, segments);
+                if (isEmptyContainer(value)) {
+                    return self.setRawSegments(segs, emptyContainerToken(value));
+                }
+                return self.setContainerSegments(segs, value);
+            },
+            else => {
+                const raw = try renderScalarValue(self.arena, value);
+                return self.setRawSegments(try segmentsFromKeys(self.arena, segments), raw);
+            },
+        }
     }
 
     /// Reparse `raw` on its own; `error.InvalidValue` unless it yields exactly
@@ -349,13 +376,39 @@ pub const Document = struct {
     /// along the way. `segments` is never empty here: `resolveNodeSegments`
     /// on zero segments always finds the root, so `setRawSegments` never
     /// falls through to this function with an empty list.
+    fn insertMissing(self: *Document, segments: []const Segment, raw: []const u8) Error!void {
+        switch (try self.resolveMissingTarget(segments)) {
+            .append => |t| return self.appendMember(t.parent, t.key, raw),
+            .chain => |t| return self.appendMappingTail(t.parent, t.keys, raw),
+        }
+    }
+
+    /// Container twin of `insertMissing`: same target resolution, but the
+    /// new leaf's value is a non-empty `.map`/`.seq` rendered as a nested
+    /// block collection instead of an inline scalar.
+    fn insertMissingContainer(self: *Document, segments: []const Segment, value: Value) Error!void {
+        switch (try self.resolveMissingTarget(segments)) {
+            .append => |t| return self.appendMemberContainer(t.parent, t.key, value),
+            .chain => |t| return self.appendMappingTailContainer(t.parent, t.keys, value),
+        }
+    }
+
+    /// Where a missing leaf belongs: `.append` when only the leaf itself is
+    /// new (every segment up to its parent already exists as a mapping), or
+    /// `.chain` when `parent` is additionally missing one or more
+    /// intermediate mapping levels through the leaf, named by `keys` (the
+    /// first missing key through the leaf key, in order).
     ///
     /// Only mappings are ever created. If the leaf segment is a sequence
     /// index (or a malformed bracket), or any segment in the missing tail
     /// is, creation is refused and the path stays `error.PathNotFound` --
     /// sequence elements can only be replaced, never created, whether or not
     /// their container exists yet.
-    fn insertMissing(self: *Document, segments: []const Segment, raw: []const u8) Error!void {
+    const MissingTarget = union(enum) {
+        append: struct { parent: *Node, key: []const u8 },
+        chain: struct { parent: *Node, keys: []const []const u8 },
+    };
+    fn resolveMissingTarget(self: *Document, segments: []const Segment) Error!MissingTarget {
         if (segments[segments.len - 1] != .key) return error.PathNotFound;
 
         // Walk the existing prefix as far as it goes. Reaching the end of
@@ -386,7 +439,7 @@ pub const Document = struct {
             }
         } else {
             if (cur.data != .mapping) return error.PathNotFound;
-            return self.appendMember(cur, segments[segments.len - 1].key, raw);
+            return .{ .append = .{ .parent = cur, .key = segments[segments.len - 1].key } };
         }
 
         // `cur` is missing `missing_key`; every remaining segment through
@@ -401,7 +454,7 @@ pub const Document = struct {
                 .index, .raw => return error.PathNotFound,
             }
         }
-        return self.appendMappingTail(cur, keys.items, raw);
+        return .{ .chain = .{ .parent = cur, .keys = keys.items } };
     }
 
     /// Where and at what indentation a new member should be spliced into
@@ -480,6 +533,81 @@ pub const Document = struct {
             if (findNestedIndentStep(self.source, root)) |step| return step;
         }
         return default_indent_step;
+    }
+
+    /// Set an EXISTING member's value (`r`) to a non-empty `.map`/`.seq`,
+    /// rendered as a block collection nested one indent step under the
+    /// member's own key. `r.parent` is a mapping and non-null: `segments`
+    /// (the caller, `setContainerSegments`) is never empty and every
+    /// segment is a literal key, so a successful `resolveWithParentSegments`
+    /// always traverses at least one mapping member.
+    fn setContainerExisting(self: *Document, r: Resolved, value: Value) Error!void {
+        const member = r.parent.?.data.mapping.items[r.index];
+        const block_indent = try indentBy(self.arena, self.indentOfLine(member.key.outer.start), self.inferIndentStep());
+
+        if (r.node.outer.start == r.node.outer.end) {
+            // The key currently has no value at all (`key:` with nothing
+            // after it, possibly a trailing comment). Its line -- comment
+            // included -- is untouched; the block is inserted as fresh
+            // lines right after it, nested under the key.
+            const at = self.lineEnd(r.node.outer.start);
+            const block = try renderContainerBlock(self.arena, value, block_indent, self.inferIndentStep());
+            return self.applyEdit(at, at, block);
+        }
+
+        // A real existing value (scalar or collection): replace everything
+        // from just past the `:` through the value's end with a leading
+        // newline plus the block, dropping any inline gap after the colon.
+        // The block's own trailing newline is omitted -- the byte
+        // originally terminating the replaced value's line (already
+        // outside `node.outer.end`) supplies it, so no blank line appears.
+        const sep_end = member.sep_end orelse return error.InvalidValue;
+        const block = try renderContainerBlock(self.arena, value, block_indent, self.inferIndentStep());
+        const replacement = try std.mem.concat(self.arena, u8, &.{ "\n", block[0 .. block.len - 1] });
+        return self.applyEdit(sep_end, r.node.outer.end, replacement);
+    }
+
+    /// Container twin of `setRawSegments`'s existing-path branch: resolve
+    /// `segments` and either replace the existing member's value or create
+    /// the missing leaf (appended, or via a created intermediate chain),
+    /// both nesting the rendered block under the target key. Only called
+    /// for a non-empty `.map`/`.seq`; an empty one is spliced as the
+    /// `{}`/`[]` token through the ordinary scalar-raw path instead.
+    fn setContainerSegments(self: *Document, segments: []const Segment, value: Value) Error!void {
+        if (self.roots.len == 0) return error.PathNotFound;
+        if (resolveWithParentSegments(self.roots[0], segments)) |r| {
+            return self.setContainerExisting(r, value);
+        }
+        return self.insertMissingContainer(segments, value);
+    }
+
+    /// Container twin of `appendMember`: appends `<key>:` then the rendered
+    /// block on the following line(s), nested one indent step under it.
+    fn appendMemberContainer(self: *Document, parent: *Node, key: []const u8, value: Value) Error!void {
+        const ins = try self.memberInsertion(parent);
+        const rendered_key = try renderScalarValue(self.arena, .{ .string = key });
+        const step = self.inferIndentStep();
+        const block = try renderContainerBlock(self.arena, value, try indentBy(self.arena, ins.indent, step), step);
+        const text = try std.mem.concat(self.arena, u8, &.{ ins.indent, rendered_key, ":\n", block });
+        return self.applyEdit(ins.at, ins.at, text);
+    }
+
+    /// Container twin of `appendMappingTail`: the created chain's leaf key
+    /// gets `:\n` (instead of `: raw`) followed by the rendered block,
+    /// nested one indent step deeper than the leaf.
+    fn appendMappingTailContainer(self: *Document, parent: *Node, keys: []const []const u8, value: Value) Error!void {
+        const ins = try self.memberInsertion(parent);
+        const step = self.inferIndentStep();
+        const text = try renderMappingTailContainer(self.arena, ins.indent, keys, value, step);
+        return self.applyEdit(ins.at, ins.at, text);
+    }
+
+    /// The exact source bytes from the start of `pos`'s line up to `pos`
+    /// itself -- the indentation string a new sibling/nested line at `pos`'s
+    /// column should reuse verbatim (spaces, tabs, whatever the document
+    /// already uses).
+    fn indentOfLine(self: *const Document, pos: usize) []const u8 {
+        return self.source[self.lineStart(pos)..pos];
     }
 
     /// Splice `replacement` over `source[start..end)`. Outside a batch this
@@ -1044,6 +1172,24 @@ fn renderMappingTail(arena: Allocator, base_indent: []const u8, keys: []const []
     return buf.toOwnedSlice(arena);
 }
 
+/// Container twin of `renderMappingTail`: every level, leaf included, gets
+/// `:\n` (there is no inline `raw` to place after the leaf's `:`), then the
+/// rendered block follows, nested one indent step deeper than the leaf key.
+fn renderMappingTailContainer(arena: Allocator, base_indent: []const u8, keys: []const []const u8, value: Value, indent_step: usize) Error![]const u8 {
+    var buf: std.ArrayList(u8) = .empty;
+    for (keys, 0..) |k, level| {
+        try buf.appendSlice(arena, base_indent);
+        try buf.appendNTimes(arena, ' ', level * indent_step);
+        const rendered_key = try renderScalarValue(arena, .{ .string = k });
+        try buf.appendSlice(arena, rendered_key);
+        try buf.appendSlice(arena, ":\n");
+    }
+    const block_indent = try indentBy(arena, base_indent, keys.len * indent_step);
+    const block = try renderContainerBlock(arena, value, block_indent, indent_step);
+    try buf.appendSlice(arena, block);
+    return buf.toOwnedSlice(arena);
+}
+
 // Node-tree construction
 //
 // The tree is built by driving the comment-aware scanner and consuming its
@@ -1476,6 +1622,72 @@ fn renderScalarValue(arena: Allocator, value: Value) Error![]const u8 {
         error.UnrepresentableScalar, error.UnrepresentableInt, error.NestingTooDeep => return error.InvalidValue,
     };
     return arena.dupe(u8, aw.written());
+}
+
+/// True for a `.map`/`.seq` with no entries/elements -- the one container
+/// shape that stays a single inline token (`{}`/`[]`) instead of breaking
+/// into a nested block, so it is spliced through the ordinary scalar-raw
+/// path rather than `renderContainerBlock`.
+fn isEmptyContainer(value: Value) bool {
+    return switch (value) {
+        .map => |m| m.len == 0,
+        .seq => |s| s.len == 0,
+        else => false,
+    };
+}
+
+/// The literal token an empty `.map`/`.seq` renders as -- identical to how
+/// `emit`/`emitValueAfterMarker` represent an empty collection inline, so a
+/// value set through here round-trips through the same spelling a fresh
+/// `emit` of the same `Value` would produce.
+fn emptyContainerToken(value: Value) []const u8 {
+    return switch (value) {
+        .map => "{}",
+        .seq => "[]",
+        else => unreachable,
+    };
+}
+
+/// `base` with `extra_spaces` additional spaces appended -- one indent
+/// level deeper than `base`, in the document's own indentation bytes plus
+/// however many more spaces a created/sampled step adds.
+fn indentBy(arena: Allocator, base: []const u8, extra_spaces: usize) Error![]const u8 {
+    var buf: std.ArrayList(u8) = .empty;
+    try buf.appendSlice(arena, base);
+    try buf.appendNTimes(arena, ' ', extra_spaces);
+    return buf.toOwnedSlice(arena);
+}
+
+/// Render a non-empty `.map`/`.seq` `value` as a nested YAML block
+/// collection, every line indented by `base_indent`, terminated by a single
+/// trailing newline. Reuses `emitter.emit` -- the same block emitter
+/// `Document.emit`'s source passthrough reproduces and a fresh document
+/// would get -- driven at `indent_step` and depth 0 (so its own nested
+/// levels come out `indent_step` apart), then re-indents every line by
+/// prepending `base_indent`: `emit`'s output for a non-empty collection
+/// always ends in exactly one trailing newline (one per entry/element,
+/// recursively), so splitting on `\n` after dropping that final byte yields
+/// exactly the block's own lines, none blank. Nested empty collections
+/// inside `value` are unaffected -- `emit` already renders those inline as
+/// `{}`/`[]`, no recursion into this function needed for them.
+fn renderContainerBlock(arena: Allocator, value: Value, base_indent: []const u8, indent_step: usize) Error![]const u8 {
+    var aw: std.Io.Writer.Allocating = .init(arena);
+    defer aw.deinit();
+    emitter.emit(&aw.writer, value, .{ .indent = indent_step }) catch |err| switch (err) {
+        error.WriteFailed, error.OutOfMemory => return error.OutOfMemory,
+        error.UnrepresentableScalar, error.UnrepresentableInt, error.NestingTooDeep => return error.InvalidValue,
+    };
+    const rendered = aw.written();
+    const body = rendered[0 .. rendered.len - 1];
+
+    var buf: std.ArrayList(u8) = .empty;
+    var it = std.mem.splitScalar(u8, body, '\n');
+    while (it.next()) |line| {
+        try buf.appendSlice(arena, base_indent);
+        try buf.appendSlice(arena, line);
+        try buf.append(arena, '\n');
+    }
+    return buf.toOwnedSlice(arena);
 }
 
 /// Convert a native Zig value into a `Value`, comptime-dispatched on
@@ -2759,4 +2971,134 @@ test "comment APIs reject embedded newlines and leave the document unchanged" {
     try std.testing.expectError(error.InvalidComment, doc.setTrailingComment("a", "carriage\rreturn"));
     try std.testing.expectEqualStrings("a: 1\nb: 2\n", try emitToString(a, &doc));
     try std.testing.expect(doc.getT(i64, "injected") == null);
+}
+
+// Setting a container (map/seq) value
+
+test "setValueSegments replaces an existing scalar value with a mapping" {
+    var ar = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer ar.deinit();
+    const a = ar.allocator();
+    var doc = try Document.parse(a, "a: 1\nb: 2\n", .{});
+    try doc.setValueSegments(&.{"a"}, .{ .map = @constCast(&[_]value_mod.Entry{
+        .{ .key = .{ .string = "x" }, .value = .{ .int = 1 } },
+        .{ .key = .{ .string = "y" }, .value = .{ .int = 2 } },
+    }) });
+    try std.testing.expectEqualStrings("a:\n  x: 1\n  y: 2\nb: 2\n", try emitToString(a, &doc));
+    try std.testing.expectEqual(@as(i64, 1), doc.getT(i64, "a.x").?);
+    try std.testing.expectEqual(@as(i64, 2), doc.getT(i64, "a.y").?);
+    try std.testing.expectEqual(@as(i64, 2), doc.getT(i64, "b").?);
+}
+
+test "setValueSegments replaces an existing scalar value with a sequence" {
+    var ar = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer ar.deinit();
+    const a = ar.allocator();
+    var doc = try Document.parse(a, "a: 1\nb: 2\n", .{});
+    try doc.setValueSegments(&.{"a"}, .{ .seq = @constCast(&[_]Value{
+        .{ .int = 1 }, .{ .int = 2 }, .{ .int = 3 },
+    }) });
+    try std.testing.expectEqualStrings("a:\n  - 1\n  - 2\n  - 3\nb: 2\n", try emitToString(a, &doc));
+    const a_val = doc.get("a").?;
+    try std.testing.expectEqual(@as(usize, 3), a_val.seq.len);
+    try std.testing.expectEqual(@as(i64, 2), doc.getT(i64, "b").?);
+}
+
+test "setValueSegments sets an existing EMPTY value to a sequence, on its own new lines" {
+    var ar = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer ar.deinit();
+    const a = ar.allocator();
+    var doc = try Document.parse(a, "a:\nb: 2\n", .{});
+    try doc.setValueSegments(&.{"a"}, .{ .seq = @constCast(&[_]Value{
+        .{ .int = 1 }, .{ .int = 2 },
+    }) });
+    try std.testing.expectEqualStrings("a:\n  - 1\n  - 2\nb: 2\n", try emitToString(a, &doc));
+}
+
+test "setValueSegments appends a NEW key with a nested mapping value, byte-preserving surrounding comments" {
+    var ar = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer ar.deinit();
+    const a = ar.allocator();
+    var doc = try Document.parse(a, "# lead\na: 1\n# trail\n", .{});
+    try doc.setValueSegments(&.{"b"}, .{ .map = @constCast(&[_]value_mod.Entry{
+        .{ .key = .{ .string = "x" }, .value = .{ .int = 1 } },
+    }) });
+    try std.testing.expectEqualStrings("# lead\na: 1\nb:\n  x: 1\n# trail\n", try emitToString(a, &doc));
+    try std.testing.expectEqual(@as(i64, 1), doc.getT(i64, "b.x").?);
+}
+
+test "setValueSegments creates a missing intermediate chain with a container leaf" {
+    var ar = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer ar.deinit();
+    const a = ar.allocator();
+    var doc = try Document.parse(a, "top: 1\n", .{});
+    try doc.setValueSegments(&.{ "a", "b", "c" }, .{ .map = @constCast(&[_]value_mod.Entry{
+        .{ .key = .{ .string = "x" }, .value = .{ .int = 9 } },
+    }) });
+    try std.testing.expectEqualStrings("top: 1\na:\n  b:\n    c:\n      x: 9\n", try emitToString(a, &doc));
+    try std.testing.expectEqual(@as(i64, 9), doc.getT(i64, "a.b.c.x").?);
+}
+
+test "setValueSegments renders a deeply nested map/seq/map value that re-parses exactly" {
+    var ar = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer ar.deinit();
+    const a = ar.allocator();
+    var doc = try Document.parse(a, "a: 1\n", .{});
+    const deep: Value = .{ .map = @constCast(&[_]value_mod.Entry{
+        .{ .key = .{ .string = "items" }, .value = .{ .seq = @constCast(&[_]Value{
+            .{ .map = @constCast(&[_]value_mod.Entry{.{ .key = .{ .string = "n" }, .value = .{ .int = 1 } }}) },
+            .{ .map = @constCast(&[_]value_mod.Entry{.{ .key = .{ .string = "n" }, .value = .{ .int = 2 } }}) },
+        }) } },
+    }) };
+    try doc.setValueSegments(&.{"a"}, deep);
+    const out = try emitToString(a, &doc);
+
+    var check = try Document.parse(a, out, .{});
+    const got = check.get("a").?;
+    try std.testing.expect(got.eql(deep));
+}
+
+test "setValueSegments round-trips an empty map and an empty seq as flow" {
+    var ar = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer ar.deinit();
+    const a = ar.allocator();
+    var doc = try Document.parse(a, "a: 1\nb: 2\n", .{});
+    try doc.setValueSegments(&.{"a"}, .{ .map = &.{} });
+    try doc.setValueSegments(&.{"b"}, .{ .seq = &.{} });
+    try std.testing.expectEqualStrings("a: {}\nb: []\n", try emitToString(a, &doc));
+
+    var check = try Document.parse(a, try emitToString(a, &doc), .{});
+    try std.testing.expect(check.get("a").?.eql(.{ .map = &.{} }));
+    try std.testing.expect(check.get("b").?.eql(.{ .seq = &.{} }));
+}
+
+test "setValueSegments nests a container at a 4-space document's inferred indent step" {
+    var ar = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer ar.deinit();
+    const a = ar.allocator();
+    var doc = try Document.parse(a, "top:\n    x: 1\n", .{});
+    try doc.setValueSegments(&.{ "top", "y" }, .{ .map = @constCast(&[_]value_mod.Entry{
+        .{ .key = .{ .string = "z" }, .value = .{ .int = 2 } },
+    }) });
+    try std.testing.expectEqualStrings("top:\n    x: 1\n    y:\n        z: 2\n", try emitToString(a, &doc));
+    try std.testing.expectEqual(@as(i64, 2), doc.getT(i64, "top.y.z").?);
+}
+
+test "setSegments forwards a Value container like setValueSegments" {
+    var ar = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer ar.deinit();
+    const a = ar.allocator();
+    var doc = try Document.parse(a, "a: 1\n", .{});
+    const v: Value = .{ .seq = @constCast(&[_]Value{ .{ .int = 1 }, .{ .int = 2 } }) };
+    try doc.setSegments(&.{"a"}, v);
+    try std.testing.expectEqualStrings("a:\n  - 1\n  - 2\n", try emitToString(a, &doc));
+}
+
+test "setValueSegments on the whole document root rejects a container value" {
+    var ar = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer ar.deinit();
+    const a = ar.allocator();
+    var doc = try Document.parse(a, "a: 1\n", .{});
+    try std.testing.expectError(error.InvalidValue, doc.setValueSegments(&.{}, .{ .map = &.{} }));
+    try std.testing.expectEqualStrings("a: 1\n", try emitToString(a, &doc));
 }

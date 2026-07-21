@@ -4,6 +4,23 @@ All notable changes to this project are documented here. Format based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this project
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `Document.setValueSegments` / `Document.setSegments` now accept a `.map`
+  or `.seq` `Value`, not just scalars: a non-empty container renders as a
+  nested YAML block collection (reusing the same block emitter `emit`
+  already uses), indented one step under the target key -- replacing an
+  existing key's value region losslessly, or following a freshly
+  appended/created `key:` line -- and re-parses back to the exact tree,
+  recursively for arbitrarily nested containers. An empty `.map`/`.seq`
+  renders inline as `{}`/`[]`, identical to how `emit` represents an empty
+  collection. Indentation reuses the same document-sampled indent-step
+  inference a created intermediate mapping chain already uses. `setValue`
+  / `set` (the dotted-string scalar setters) are unchanged and still
+  reject containers.
+
 ## [0.3.0] - 2026-07-21
 
 ### Added

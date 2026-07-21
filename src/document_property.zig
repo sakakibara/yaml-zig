@@ -65,8 +65,19 @@ const adv_fixture_strings = [_][]const u8{
 
 const fixed_floats = [_]f64{ 0.0, -0.0, 1.5, -2.5, 100.0, 0.001, 42.25, 1e10, 1e-10 };
 
-const sample_seq_values = [_]Value{ .{ .int = 1 }, .{ .int = 2 } };
-const sample_map_entries = [_]yaml.Entry{.{ .key = .{ .string = "x" }, .value = .{ .int = 1 } }};
+/// Distinct key pool for a generated container VALUE's own entries (as
+/// opposed to `bare_keys`/`adv_fixture_keys`, which name mapping members of
+/// the surrounding FIXTURE document). `genContainerMap` takes `n <= len`
+/// keys as a contiguous rotation of this pool, which -- since a rotation of
+/// distinct elements taken consecutively (with wraparound) never repeats --
+/// guarantees no duplicate key within one generated map (a duplicate would
+/// collapse to one entry on re-parse, breaking the read-back-exact check).
+const container_value_keys = [_][]const u8{ "n", "kind", "tag", "val" };
+
+/// Nesting cap for a generated container VALUE (distinct from the
+/// fixture's own `max_depth`): bounds `genNestedValue`'s recursion so a
+/// case can't run away.
+const max_target_depth: usize = 3;
 
 // Generator
 
@@ -241,12 +252,48 @@ fn pickNewBareKey(rng: std.Random) []const u8 {
     return new_bare_keys[rng.uintLessThan(usize, new_bare_keys.len)];
 }
 
-fn genTargetValue(rng: std.Random) Value {
+/// A scalar most of the time; a fresh nested map/seq (bounded by
+/// `max_target_depth`) the rest, so a generated container's own entries can
+/// themselves be containers -- exercising the recursive-render requirement
+/// (a map whose value is a seq whose elements are maps, ...) without ever
+/// running away.
+fn genNestedValue(arena: Allocator, rng: std.Random, depth: usize) Allocator.Error!Value {
+    if (depth >= max_target_depth or rng.uintLessThan(u8, 3) != 0) return genScalarValue(rng);
+    if (rng.boolean()) return genContainerMap(arena, rng, depth);
+    return genContainerSeq(arena, rng, depth);
+}
+
+/// A non-empty map of 1-3 entries with distinct keys (see
+/// `container_value_keys`), each value possibly itself nested.
+fn genContainerMap(arena: Allocator, rng: std.Random, depth: usize) Allocator.Error!Value {
+    const n = 1 + rng.uintLessThan(usize, 3);
+    const entries = try arena.alloc(yaml.Entry, n);
+    const offset = rng.uintLessThan(usize, container_value_keys.len);
+    for (entries, 0..) |*e, idx| {
+        const key = container_value_keys[(offset + idx) % container_value_keys.len];
+        e.* = .{ .key = .{ .string = key }, .value = try genNestedValue(arena, rng, depth + 1) };
+    }
+    return .{ .map = entries };
+}
+
+/// A non-empty sequence of 1-3 elements, each possibly itself nested.
+fn genContainerSeq(arena: Allocator, rng: std.Random, depth: usize) Allocator.Error!Value {
+    const n = 1 + rng.uintLessThan(usize, 3);
+    const items = try arena.alloc(Value, n);
+    for (items) |*it| it.* = try genNestedValue(arena, rng, depth + 1);
+    return .{ .seq = items };
+}
+
+/// One of: empty map, non-empty (possibly deeply nested) map, empty seq,
+/// non-empty (possibly deeply nested) seq, or (most often) a scalar --
+/// so a target's value exercises both the empty-container inline-token
+/// path and the block-collection render path, nested arbitrarily.
+fn genTargetValue(arena: Allocator, rng: std.Random) Allocator.Error!Value {
     return switch (rng.uintLessThan(u8, 14)) {
         0 => .{ .map = &.{} },
-        1 => .{ .map = @constCast(&sample_map_entries) },
+        1 => try genContainerMap(arena, rng, 0),
         2 => .{ .seq = &.{} },
-        3 => .{ .seq = @constCast(&sample_seq_values) },
+        3 => try genContainerSeq(arena, rng, 0),
         else => genScalarValue(rng),
     };
 }
@@ -270,7 +317,7 @@ fn genTarget(arena: Allocator, rng: std.Random, gen: *const GenDocument) !Target
         return .{
             .kind = .replace_existing,
             .segments = leaf.path,
-            .value = genTargetValue(rng),
+            .value = try genTargetValue(arena, rng),
             .orig_span = leaf.span,
             .path_display = try joinDisplay(arena, leaf.path),
         };
@@ -280,7 +327,7 @@ fn genTarget(arena: Allocator, rng: std.Random, gen: *const GenDocument) !Target
         return .{
             .kind = .append_new,
             .segments = segs,
-            .value = genTargetValue(rng),
+            .value = try genTargetValue(arena, rng),
             .path_display = try joinDisplay(arena, segs),
         };
     } else if (r < 9) {
@@ -293,7 +340,7 @@ fn genTarget(arena: Allocator, rng: std.Random, gen: *const GenDocument) !Target
         return .{
             .kind = .create_chain,
             .segments = final,
-            .value = genTargetValue(rng),
+            .value = try genTargetValue(arena, rng),
             .path_display = try joinDisplay(arena, final),
         };
     } else {
@@ -328,6 +375,19 @@ fn resolveBySegments(v: Value, segments: []const []const u8) ?Value {
         cur = found orelse return null;
     }
     return cur;
+}
+
+/// True for a `.map`/`.seq` holding at least one entry/element -- the
+/// container shape that nests as a nested block (and so also consumes the
+/// separator gap right after the key's `:`), as opposed to an empty one,
+/// which stays a single inline `{}`/`[]` token spliced exactly like a
+/// scalar.
+fn isNonEmptyContainer(v: Value) bool {
+    return switch (v) {
+        .map => |m| m.len > 0,
+        .seq => |s| s.len > 0,
+        else => false,
+    };
 }
 
 fn segmentsEqual(a: []const []const u8, b: []const []const u8) bool {
@@ -474,10 +534,16 @@ fn runCase(gpa: Allocator, i: usize) !void {
     // can't be masked by an unrelated blank added elsewhere, and a dropped
     // comment can't hide behind another comment's text containing it. A
     // pure value-replace on an existing leaf is additionally byte-exact
-    // outside the replaced value token.
+    // outside the replaced value token -- EXCEPT when the new value is a
+    // non-empty container: nesting it under the key by design also
+    // replaces the separator gap right after the `:` (so no stray trailing
+    // space is left before the block's own leading newline), which is
+    // bytes strictly before the old value token's start. An empty
+    // container ({}/[]) stays a single inline token spliced exactly like a
+    // scalar, so it keeps the strict check.
     if (!try triviaIsSubsequence(arena, gen.trivia, last_output)) return error.TriviaLost;
 
-    if (target.kind == .replace_existing) {
+    if (target.kind == .replace_existing and !isNonEmptyContainer(target.value)) {
         if (target.orig_span) |sp| {
             const prefix = gen.source[0..sp.start];
             const suffix = gen.source[sp.end..];
