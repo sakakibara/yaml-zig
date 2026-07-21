@@ -19,6 +19,29 @@
 //! read through the FIRST document's composed `Value` (the common
 //! single-document access pattern); `emit` reproduces the whole stream.
 //!
+//! `set` on a path whose intermediate mapping(s) are also missing creates
+//! them too, as a single block-mapping chain appended at the first missing
+//! key, indented one level deeper per nesting level (matching the sibling
+//! indentation where the chain starts). Only mappings are ever created this
+//! way: sequence elements can still only be replaced, never created, so a
+//! `[N]` anywhere in the missing tail (including as the leaf itself) stays
+//! `error.PathNotFound`, unchanged from before.
+//!
+//! `Document.empty` bootstraps a document with no source bytes at all (a
+//! not-yet-created file): reads see nothing, and the first `set` splices the
+//! root mapping and the whole requested path in one shot. `Document.parse`
+//! still requires well-formed YAML -- an empty input still composes to its
+//! usual (non-mapping) root, same as `yaml.parse`; `empty` is the dedicated
+//! entry point for the "file may not exist yet" case.
+//!
+//! `setValueSegments` / `setSegments` / `removeSegments` take a path as
+//! pre-split segments (`&.{ "host", "example.com" }`) instead of a dotted
+//! string, so a key containing a literal `.` is addressed unambiguously
+//! (each segment is a literal key, never re-split on `.` or `[...]`). `set`
+//! / `setValue` / `remove` still take dotted string paths and split them
+//! into segments the same way (`PathIterator`) before doing the same work,
+//! so a dot-free path behaves identically either way.
+//!
 //! ```zig
 //! var doc = try yaml.Document.parse(arena, src, .{});
 //! const port = doc.getT(u16, "server.port").?;
@@ -43,6 +66,7 @@ const Span = value_mod.Span;
 const Scanner = scanner_mod.Scanner;
 const Token = scanner_mod.RawToken;
 const TokenKind = scanner_mod.TokenKind;
+const Segment = value_mod.PathIterator.Segment;
 
 pub const Error = error{
     PathNotFound,
@@ -149,6 +173,30 @@ pub const Document = struct {
         };
     }
 
+    /// Bootstrap a document with no source bytes -- the "file doesn't exist
+    /// yet" case. Reads (`get`/`getT`/`has`) see nothing; emitting
+    /// unmodified reproduces the empty input, same as `parse` does for any
+    /// untouched document. The first `set` (or any segment variant) splices
+    /// the root mapping and the whole requested path in as a single edit.
+    /// Unlike `parse`, this never fails.
+    pub fn empty(arena: Allocator, options: yaml.ParseOptions) Error!Document {
+        const root = try arena.create(Node);
+        root.* = .{
+            .outer = .{ .start = 0, .end = 0 },
+            .content = .{ .start = 0, .end = 0 },
+            .data = .{ .mapping = .empty },
+        };
+        const docs = try arena.dupe(Value, &.{Value{ .map = &.{} }});
+        const roots = try arena.dupe(*Node, &.{root});
+        return .{
+            .arena = arena,
+            .source = "",
+            .docs = docs,
+            .roots = roots,
+            .options = options,
+        };
+    }
+
     /// Look up a value by dotted path in the first document (syntax as
     /// `Value.get`). Returns null if absent or if the stream is empty.
     pub fn get(self: *const Document, path: []const u8) ?Value {
@@ -188,8 +236,11 @@ pub const Document = struct {
     /// `emit`, so a set string `"true"`/`"123"`/`"~"`/`"a: b"` is quoted.
     /// If the leaf is absent but its parent block mapping exists, the member
     /// is APPENDED at the sibling indentation; a missing intermediate
-    /// container is `error.PathNotFound`. Each edit retains a fresh
-    /// source/tree generation in the arena.
+    /// mapping is created too (a new block-mapping chain, indented one level
+    /// deeper per nesting level), and only mappings are ever created this
+    /// way -- a `[N]` sequence index anywhere in the missing tail stays
+    /// `error.PathNotFound`. Each edit retains a fresh source/tree
+    /// generation in the arena.
     pub fn set(self: *Document, path: []const u8, value: anytype) Error!void {
         const v = try valueFromAny(self.arena, @TypeOf(value), value);
         return self.setValue(path, v);
@@ -199,8 +250,8 @@ pub const Document = struct {
     /// the emitter so the quoting matches `emit` (a `.string` of `"true"`/
     /// `"123"`/`"~"` is round-trip-safe quoted). Splices over the value's
     /// bytes like `set`; a missing leaf in an existing block mapping appends a
-    /// new member. This is the named, canonical setter `set` delegates to for
-    /// its `Value` case.
+    /// new member, creating any missing intermediate mapping(s) too. This is
+    /// the named, canonical setter `set` delegates to for its `Value` case.
     pub fn setValue(self: *Document, path: []const u8, value: Value) Error!void {
         const raw = try renderScalarValue(self.arena, value);
         return self.setRaw(path, raw);
@@ -212,10 +263,26 @@ pub const Document = struct {
     /// otherwise. Splices verbatim, so this is the escape hatch for inserting
     /// pre-formatted YAML (specific flow style, quoting) without the scalar
     /// renderer's normalization. Like `set`, a missing leaf in an existing
-    /// block mapping appends a new member.
+    /// block mapping appends a new member, creating any missing intermediate
+    /// mapping(s) too.
     pub fn setLiteral(self: *Document, path: []const u8, raw: []const u8) Error!void {
         try self.validateLiteral(raw);
         return self.setRaw(path, try self.arena.dupe(u8, raw));
+    }
+
+    /// Segment-taking twin of `set`. `segments` are literal mapping keys
+    /// addressed in order -- never re-split on `.` or `[N]` -- so a key
+    /// containing either byte (e.g. `"example.com"`) is addressed
+    /// unambiguously. See `set` for the type-dispatch rules.
+    pub fn setSegments(self: *Document, segments: []const []const u8, value: anytype) Error!void {
+        const v = try valueFromAny(self.arena, @TypeOf(value), value);
+        return self.setValueSegments(segments, v);
+    }
+
+    /// Segment-taking twin of `setValue`.
+    pub fn setValueSegments(self: *Document, segments: []const []const u8, value: Value) Error!void {
+        const raw = try renderScalarValue(self.arena, value);
+        return self.setRawSegments(try segmentsFromKeys(self.arena, segments), raw);
     }
 
     /// Reparse `raw` on its own; `error.InvalidValue` unless it yields exactly
@@ -231,8 +298,16 @@ pub const Document = struct {
     /// the result. When the leaf does not exist but its parent block mapping
     /// does, append it as a new member instead.
     fn setRaw(self: *Document, path: []const u8, raw: []const u8) Error!void {
+        return self.setRawSegments(try segmentsFromPath(self.arena, path), raw);
+    }
+
+    /// Segment-based core shared by `setRaw` (string paths, pre-split via
+    /// `segmentsFromPath`) and `setValueSegments` (already literal key
+    /// segments). An existing full path is edited in place; a missing one is
+    /// created by `insertMissing`.
+    fn setRawSegments(self: *Document, segments: []const Segment, raw: []const u8) Error!void {
         if (self.roots.len == 0) return error.PathNotFound;
-        if (resolveNode(self.roots[0], path)) |node| {
+        if (resolveNodeSegments(self.roots[0], segments)) |node| {
             // An empty value is a zero-width node anchored just past the `:`
             // (or the key end). Splicing `raw` at the anchor may glue it to
             // the colon/key (`a:` + 1 -> `a:1`). When the byte at the anchor
@@ -267,25 +342,83 @@ pub const Document = struct {
             }
             return self.applyEdit(node.outer.start, node.outer.end, raw);
         }
-        return self.appendNewMember(path, raw);
+        return self.insertMissing(segments, raw);
     }
 
-    /// Append `<key>: raw` as a new member of the block mapping that `path`'s
-    /// parent resolves to. Only the leaf may be absent: a missing intermediate
-    /// container yields `error.PathNotFound`. The new member is placed after
-    /// the last existing member at the same indentation, so it matches sibling
-    /// line style.
-    fn appendNewMember(self: *Document, path: []const u8, raw: []const u8) Error!void {
-        const split = splitLeaf(path) orelse return error.PathNotFound;
-        const parent = if (split.parent.len == 0)
-            self.roots[0]
-        else
-            resolveNode(self.roots[0], split.parent) orelse return error.PathNotFound;
-        if (parent.data != .mapping) return error.PathNotFound;
+    /// Splice a brand-new leaf, creating any missing intermediate mapping(s)
+    /// along the way. `segments` is never empty here: `resolveNodeSegments`
+    /// on zero segments always finds the root, so `setRawSegments` never
+    /// falls through to this function with an empty list.
+    ///
+    /// Only mappings are ever created. If the leaf segment is a sequence
+    /// index (or a malformed bracket), or any segment in the missing tail
+    /// is, creation is refused and the path stays `error.PathNotFound` --
+    /// sequence elements can only be replaced, never created, whether or not
+    /// their container exists yet.
+    fn insertMissing(self: *Document, segments: []const Segment, raw: []const u8) Error!void {
+        if (segments[segments.len - 1] != .key) return error.PathNotFound;
+
+        // Walk the existing prefix as far as it goes. Reaching the end of
+        // the loop normally (not via `break`) means every segment up to the
+        // leaf's immediate parent already exists -- only the leaf itself is
+        // new, today's single-level append. A `break` means `cur` (a real,
+        // existing mapping) is missing `missing_key` and everything from
+        // there through the leaf must be created.
+        var cur = self.roots[0];
+        var i: usize = 0;
+        var missing_key: []const u8 = undefined;
+        while (i < segments.len - 1) : (i += 1) {
+            switch (segments[i]) {
+                .key => |k| {
+                    if (cur.data != .mapping) return error.PathNotFound;
+                    if (findMemberIndex(cur, k)) |mi| {
+                        cur = cur.data.mapping.items[mi].value;
+                    } else {
+                        missing_key = k;
+                        break;
+                    }
+                },
+                .index => |idx| {
+                    if (cur.data != .sequence or idx >= cur.data.sequence.items.len) return error.PathNotFound;
+                    cur = cur.data.sequence.items[idx];
+                },
+                .raw => return error.PathNotFound,
+            }
+        } else {
+            if (cur.data != .mapping) return error.PathNotFound;
+            return self.appendMember(cur, segments[segments.len - 1].key, raw);
+        }
+
+        // `cur` is missing `missing_key`; every remaining segment through
+        // the leaf must be a key too -- only mappings are ever created, so a
+        // `[N]` anywhere in the tail (including the leaf) stays
+        // `error.PathNotFound`.
+        var keys: std.ArrayList([]const u8) = .empty;
+        try keys.append(self.arena, missing_key);
+        for (segments[i + 1 ..]) |seg| {
+            switch (seg) {
+                .key => |k| try keys.append(self.arena, k),
+                .index, .raw => return error.PathNotFound,
+            }
+        }
+        return self.appendMappingTail(cur, keys.items, raw);
+    }
+
+    /// Where and at what indentation a new member should be spliced into
+    /// `parent`: after the last existing member at its indentation, or --
+    /// for a virtual zero-width root (only `Document.empty`'s bootstrap
+    /// mapping has one) -- at the root itself with no indentation. A real
+    /// empty flow mapping (`{}`, non-zero-width but no members) has no block
+    /// line to model an indentation from, so appending into it is out of
+    /// scope (`error.InvalidValue`), unchanged from before.
+    fn memberInsertion(self: *const Document, parent: *Node) Error!struct { indent: []const u8, at: usize } {
         const members = parent.data.mapping.items;
-        // Flow / empty mappings have no block line to model an indentation
-        // from; appending into them is out of scope.
-        if (members.len == 0) return error.InvalidValue;
+        if (members.len == 0) {
+            if (parent.outer.start == parent.outer.end) {
+                return .{ .indent = "", .at = parent.outer.start };
+            }
+            return error.InvalidValue;
+        }
 
         const last = members[members.len - 1];
         // Indentation of the new member = the column the last sibling's key
@@ -307,9 +440,25 @@ pub const Document = struct {
         // whose span already includes its trailing newline, `lineEnd` of its end
         // resolves to the same position (it finds a `\n` immediately and returns
         // one past it), so no extra blank line is introduced.
-        const insert_at = self.lineEnd(last.value.outer.end);
-        const text = try std.mem.concat(self.arena, u8, &.{ indent, split.leaf, ": ", raw, "\n" });
-        return self.applyEdit(insert_at, insert_at, text);
+        return .{ .indent = indent, .at = self.lineEnd(last.value.outer.end) };
+    }
+
+    /// Append `<key>: raw` as a new member of `parent`, at the indentation
+    /// and position `memberInsertion` resolves.
+    fn appendMember(self: *Document, parent: *Node, key: []const u8, raw: []const u8) Error!void {
+        const ins = try self.memberInsertion(parent);
+        const text = try std.mem.concat(self.arena, u8, &.{ ins.indent, key, ": ", raw, "\n" });
+        return self.applyEdit(ins.at, ins.at, text);
+    }
+
+    /// Append a brand-new nested block-mapping chain as one member of
+    /// `parent`: `keys[0]` becomes the new member's key (at `parent`'s
+    /// member indentation), wrapping `keys[1]`, ... down to the leaf, whose
+    /// value is `raw`.
+    fn appendMappingTail(self: *Document, parent: *Node, keys: []const []const u8, raw: []const u8) Error!void {
+        const ins = try self.memberInsertion(parent);
+        const text = try renderMappingTail(self.arena, ins.indent, keys, raw);
+        return self.applyEdit(ins.at, ins.at, text);
     }
 
     /// Splice `replacement` over `source[start..end)`. Outside a batch this
@@ -427,8 +576,17 @@ pub const Document = struct {
     /// no members has no valid presentation. The document root itself cannot be
     /// removed (`error.InvalidValue`); a missing path is `error.PathNotFound`.
     pub fn remove(self: *Document, path: []const u8) Error!void {
+        return self.removeSeg(try segmentsFromPath(self.arena, path));
+    }
+
+    /// Segment-taking twin of `remove`.
+    pub fn removeSegments(self: *Document, segments: []const []const u8) Error!void {
+        return self.removeSeg(try segmentsFromKeys(self.arena, segments));
+    }
+
+    fn removeSeg(self: *Document, segments: []const Segment) Error!void {
         if (self.roots.len == 0) return error.PathNotFound;
-        const r = resolveWithParent(self.roots[0], path) orelse return error.PathNotFound;
+        const r = resolveWithParentSegments(self.roots[0], segments) orelse return error.PathNotFound;
         const parent = r.parent orelse return error.InvalidValue;
 
         // Sole member: a block collection cannot be empty, so collapse the
@@ -439,8 +597,8 @@ pub const Document = struct {
             .scalar => unreachable,
         };
         if (count == 1) {
-            const empty = if (parent.data == .mapping) "{}" else "[]";
-            return self.applyEdit(parent.outer.start, parent.outer.end, empty);
+            const empty_form = if (parent.data == .mapping) "{}" else "[]";
+            return self.applyEdit(parent.outer.start, parent.outer.end, empty_form);
         }
 
         // A flow collection (`[1, 2, 3]` / `{x: 1, y: 2}`) packs every member
@@ -658,28 +816,6 @@ pub const Document = struct {
         return node.content;
     }
 
-    /// Split a dotted path into its parent path and final leaf key. Returns
-    /// null for an empty path or one ending in `]`/`.` (the leaf would be a
-    /// sequence index or empty, neither of which is an appendable map key).
-    const Split = struct { parent: []const u8, leaf: []const u8 };
-    fn splitLeaf(path: []const u8) ?Split {
-        if (path.len == 0 or path[path.len - 1] == ']' or path[path.len - 1] == '.') return null;
-        var it = value_mod.PathIterator.init(path);
-        while (it.next()) |_| {}
-        const tail = path[it.tail_start..];
-        // A `]` inside the tail bounds the leaf even though lookups treat it
-        // as key content, so a leaf key never spans across a `]`.
-        if (std.mem.lastIndexOfScalar(u8, tail, ']')) |stray| {
-            const cut = it.tail_start + stray + 1;
-            return .{ .parent = path[0..cut], .leaf = path[cut..] };
-        }
-        const parent_end = if (it.tail_start > 0 and path[it.tail_start - 1] == '.')
-            it.tail_start - 1
-        else
-            it.tail_start;
-        return .{ .parent = path[0..parent_end], .leaf = path[it.tail_start..] };
-    }
-
     /// Walk `path` through the node tree (same syntax as `Value.get`).
     fn resolveNode(root: *Node, path: []const u8) ?*Node {
         var cur = root;
@@ -687,20 +823,8 @@ pub const Document = struct {
         while (it.next()) |segment| {
             switch (segment) {
                 .key => |k| {
-                    if (cur.data != .mapping) return null;
-                    // Duplicate keys are last-wins, matching the composed Value's
-                    // mapGet: scan for the LAST member whose decoded key matches
-                    // so reads and writes designate the same node.
-                    const found: ?*Node = blk: {
-                        const items = cur.data.mapping.items;
-                        var mi = items.len;
-                        while (mi > 0) {
-                            mi -= 1;
-                            if (std.mem.eql(u8, items[mi].key.decoded, k)) break :blk items[mi].value;
-                        }
-                        break :blk null;
-                    };
-                    cur = found orelse return null;
+                    const mi = findMemberIndex(cur, k) orelse return null;
+                    cur = cur.data.mapping.items[mi].value;
                 },
                 .index => |idx| {
                     if (cur.data != .sequence) return null;
@@ -728,18 +852,54 @@ pub const Document = struct {
         while (it.next()) |segment| {
             switch (segment) {
                 .key => |k| {
-                    if (cur.data != .mapping) return null;
-                    // Last-wins, as in resolveNode and the composed Value.
-                    const found: ?usize = blk: {
-                        const items = cur.data.mapping.items;
-                        var i = items.len;
-                        while (i > 0) {
-                            i -= 1;
-                            if (std.mem.eql(u8, items[i].key.decoded, k)) break :blk i;
-                        }
-                        break :blk null;
-                    };
-                    const mi = found orelse return null;
+                    const mi = findMemberIndex(cur, k) orelse return null;
+                    parent = cur;
+                    index = mi;
+                    cur = cur.data.mapping.items[mi].value;
+                },
+                .index => |idx| {
+                    if (cur.data != .sequence) return null;
+                    if (idx >= cur.data.sequence.items.len) return null;
+                    parent = cur;
+                    index = idx;
+                    cur = cur.data.sequence.items[idx];
+                },
+                .raw => return null,
+            }
+        }
+        return .{ .node = cur, .parent = parent, .index = index };
+    }
+
+    /// Walk pre-split `segments` through the node tree, the segment-taking
+    /// twin of `resolveNode` shared by `setRawSegments` and `insertMissing`.
+    fn resolveNodeSegments(root: *Node, segments: []const Segment) ?*Node {
+        var cur = root;
+        for (segments) |segment| {
+            switch (segment) {
+                .key => |k| {
+                    const mi = findMemberIndex(cur, k) orelse return null;
+                    cur = cur.data.mapping.items[mi].value;
+                },
+                .index => |idx| {
+                    if (cur.data != .sequence) return null;
+                    if (idx >= cur.data.sequence.items.len) return null;
+                    cur = cur.data.sequence.items[idx];
+                },
+                .raw => return null,
+            }
+        }
+        return cur;
+    }
+
+    /// Segment-taking twin of `resolveWithParent`, backing `removeSegments`.
+    fn resolveWithParentSegments(root: *Node, segments: []const Segment) ?Resolved {
+        var cur = root;
+        var parent: ?*Node = null;
+        var index: usize = 0;
+        for (segments) |segment| {
+            switch (segment) {
+                .key => |k| {
+                    const mi = findMemberIndex(cur, k) orelse return null;
                     parent = cur;
                     index = mi;
                     cur = cur.data.mapping.items[mi].value;
@@ -757,6 +917,69 @@ pub const Document = struct {
         return .{ .node = cur, .parent = parent, .index = index };
     }
 };
+
+/// Duplicate keys are last-wins (matching the composed `Value`'s `mapGet`):
+/// scan for the LAST member of `node` (must be `.mapping`) whose decoded key
+/// equals `key`, so reads and writes agree on which member a duplicated key
+/// designates. Returns null when `node` is not a mapping or has no such key.
+fn findMemberIndex(node: *const Node, key: []const u8) ?usize {
+    if (node.data != .mapping) return null;
+    const items = node.data.mapping.items;
+    var mi = items.len;
+    while (mi > 0) {
+        mi -= 1;
+        if (std.mem.eql(u8, items[mi].key.decoded, key)) return mi;
+    }
+    return null;
+}
+
+/// Split a dotted string path into segments via `PathIterator`,
+/// arena-allocated so the creation-aware core (`insertMissing`) can walk it
+/// more than once (the streaming iterator is single-pass).
+fn segmentsFromPath(arena: Allocator, path: []const u8) Error![]const Segment {
+    var list: std.ArrayList(Segment) = .empty;
+    var it = value_mod.PathIterator.init(path);
+    while (it.next()) |segment| try list.append(arena, segment);
+    return list.toOwnedSlice(arena);
+}
+
+/// Wrap pre-split key segments as `Segment.key` values. The segments API
+/// never interprets `.` or `[...]`, so a key containing either byte still
+/// addresses exactly that one member.
+fn segmentsFromKeys(arena: Allocator, keys: []const []const u8) Error![]const Segment {
+    const out = try arena.alloc(Segment, keys.len);
+    for (keys, out) |k, *seg| seg.* = .{ .key = k };
+    return out;
+}
+
+/// Spaces of indentation per nesting level when materializing a brand-new
+/// nested block-mapping chain (no existing sibling to infer a step from).
+/// Matches the emitter's own default `indent` option and every hand-written
+/// example in this library's docs/tests.
+const default_indent_step: usize = 2;
+
+/// Render the block-mapping chain text for one or more newly-created
+/// nesting levels: `keys[0]` at `base_indent` wraps `keys[1]` one level
+/// deeper, and so on down to the leaf (`keys[keys.len - 1]`), whose value is
+/// `raw`. `base_indent` is the indentation the FIRST line (`keys[0]`) is
+/// inserted at -- `appendMappingTail`'s caller-determined sibling style or
+/// the empty-document bootstrap.
+fn renderMappingTail(arena: Allocator, base_indent: []const u8, keys: []const []const u8, raw: []const u8) Error![]const u8 {
+    var buf: std.ArrayList(u8) = .empty;
+    for (keys, 0..) |k, level| {
+        try buf.appendSlice(arena, base_indent);
+        try buf.appendNTimes(arena, ' ', level * default_indent_step);
+        try buf.appendSlice(arena, k);
+        if (level == keys.len - 1) {
+            try buf.appendSlice(arena, ": ");
+            try buf.appendSlice(arena, raw);
+            try buf.append(arena, '\n');
+        } else {
+            try buf.appendSlice(arena, ":\n");
+        }
+    }
+    return buf.toOwnedSlice(arena);
+}
 
 // Node-tree construction
 //
@@ -1492,11 +1715,167 @@ test "append via setLiteral" {
     try doc.emit(&aw.writer);
     try std.testing.expectEqualStrings("a: 1\nb: [1, 2]\n", aw.written());
 }
-test "append with missing intermediate errors" {
+test "set creates a missing intermediate mapping, then the leaf" {
+    var ar = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer ar.deinit();
+    const a = ar.allocator();
+    var doc = try Document.parse(a, "a: 1\n", .{});
+    try doc.set("x.y", @as(i64, 1)); // x doesn't exist yet
+    var aw: std.Io.Writer.Allocating = .init(a);
+    defer aw.deinit();
+    try doc.emit(&aw.writer);
+    try std.testing.expectEqualStrings("a: 1\nx:\n  y: 1\n", aw.written());
+    try std.testing.expectEqual(@as(i64, 1), doc.getT(i64, "x.y").?);
+}
+test "set creates a 3-deep missing path, preserving surrounding trivia" {
+    var ar = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer ar.deinit();
+    const a = ar.allocator();
+    const src = "# header\na: 1  # keep\n";
+    var doc = try Document.parse(a, src, .{});
+    try doc.set("x.y.z", @as(i64, 2));
+    var aw: std.Io.Writer.Allocating = .init(a);
+    defer aw.deinit();
+    try doc.emit(&aw.writer);
+    try std.testing.expectEqualStrings("# header\na: 1  # keep\nx:\n  y:\n    z: 2\n", aw.written());
+    try std.testing.expectEqual(@as(i64, 2), doc.getT(i64, "x.y.z").?);
+    // Untouched prefix bytes (comment + original key/comment) are preserved.
+    try std.testing.expectEqual(@as(i64, 1), doc.getT(i64, "a").?);
+}
+test "set creates missing intermediates through a partially existing prefix" {
+    var ar = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer ar.deinit();
+    const a = ar.allocator();
+    var doc = try Document.parse(a, "top:\n  x: 1\n", .{});
+    try doc.set("top.a.b", @as(i64, 2));
+    var aw: std.Io.Writer.Allocating = .init(a);
+    defer aw.deinit();
+    try doc.emit(&aw.writer);
+    try std.testing.expectEqualStrings("top:\n  x: 1\n  a:\n    b: 2\n", aw.written());
+    try std.testing.expectEqual(@as(i64, 2), doc.getT(i64, "top.a.b").?);
+    try std.testing.expectEqual(@as(i64, 1), doc.getT(i64, "top.x").?);
+}
+test "intermediate creation never fabricates a sequence: a [N] anywhere in the missing tail stays PathNotFound" {
     var ar = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer ar.deinit();
     var doc = try Document.parse(ar.allocator(), "a: 1\n", .{});
-    try std.testing.expectError(error.PathNotFound, doc.set("x.y", @as(i64, 1))); // x doesn't exist
+    // "missing" doesn't exist; the path would need it to become a sequence
+    // to hold index 0 -- creation only ever builds mappings, so this stays
+    // an error, exactly like the pre-existing "leaf is an index" rule.
+    try std.testing.expectError(error.PathNotFound, doc.set("missing[0].c", true));
+    try std.testing.expectError(error.PathNotFound, doc.set("missing[0]", true));
+    try std.testing.expectError(error.PathNotFound, doc.set("missing.mid[0].c", true));
+}
+test "set through a scalar stays PathNotFound, unchanged from before" {
+    var ar = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer ar.deinit();
+    var doc = try Document.parse(ar.allocator(), "a: 1\n", .{});
+    try std.testing.expectError(error.PathNotFound, doc.set("a.leaf", true));
+}
+test "Document.empty bootstraps root + full path on first set" {
+    var ar = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer ar.deinit();
+    const a = ar.allocator();
+    var doc = try Document.empty(a, .{});
+    var aw0: std.Io.Writer.Allocating = .init(a);
+    defer aw0.deinit();
+    try doc.emit(&aw0.writer);
+    try std.testing.expectEqualStrings("", aw0.written());
+    try std.testing.expect(!doc.has("a.b.c"));
+
+    try doc.set("a.b.c", @as(i64, 1));
+    var aw: std.Io.Writer.Allocating = .init(a);
+    defer aw.deinit();
+    try doc.emit(&aw.writer);
+    try std.testing.expectEqualStrings("a:\n  b:\n    c: 1\n", aw.written());
+    try std.testing.expectEqual(@as(i64, 1), doc.getT(i64, "a.b.c").?);
+}
+test "Document.empty then a single-segment set" {
+    var ar = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer ar.deinit();
+    const a = ar.allocator();
+    var doc = try Document.empty(a, .{});
+    try doc.set("x", @as(i64, 9));
+    var aw: std.Io.Writer.Allocating = .init(a);
+    defer aw.deinit();
+    try doc.emit(&aw.writer);
+    try std.testing.expectEqualStrings("x: 9\n", aw.written());
+}
+test "setValueSegments creates the single literal key, not a nested dotted path" {
+    var ar = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer ar.deinit();
+    const a = ar.allocator();
+    var doc = try Document.parse(a, "other: 1\n", .{});
+    try doc.setValueSegments(&.{ "host", "example.com" }, .{ .string = "1.2.3.4" });
+    var aw: std.Io.Writer.Allocating = .init(a);
+    defer aw.deinit();
+    try doc.emit(&aw.writer);
+    try std.testing.expectEqualStrings("other: 1\nhost:\n  example.com: 1.2.3.4\n", aw.written());
+
+    // Re-parse independently and confirm the key is the single literal
+    // "example.com", not a nested "example" -> "com" mapping. A dotted-path
+    // lookup would re-split on the key's own `.`, so inspect the node tree
+    // directly instead.
+    var check = try Document.parse(a, aw.written(), .{});
+    const host = check.roots[0].data.mapping.items[1];
+    try std.testing.expectEqualStrings("host", host.key.decoded);
+    try std.testing.expect(host.value.data == .mapping);
+    try std.testing.expectEqual(@as(usize, 1), host.value.data.mapping.items.len);
+    const inner = host.value.data.mapping.items[0];
+    try std.testing.expectEqualStrings("example.com", inner.key.decoded);
+    // Cross-check against the composed Value tree too: one entry, keyed by
+    // the single literal "example.com", not two levels of nesting.
+    const host_value = check.get("host").?;
+    try std.testing.expectEqual(@as(usize, 1), host_value.map.len);
+    try std.testing.expectEqualStrings("example.com", host_value.map[0].key.string);
+    try std.testing.expectEqualStrings("1.2.3.4", host_value.map[0].value.string);
+}
+test "setSegments dispatches native types like set" {
+    var ar = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer ar.deinit();
+    const a = ar.allocator();
+    var doc = try Document.parse(a, "top: 1\n", .{});
+    try doc.setSegments(&.{ "server", "host" }, "example.com");
+    var aw: std.Io.Writer.Allocating = .init(a);
+    defer aw.deinit();
+    try doc.emit(&aw.writer);
+    try std.testing.expectEqualStrings("top: 1\nserver:\n  host: example.com\n", aw.written());
+    try std.testing.expectEqualStrings("example.com", doc.getT([]const u8, "server.host").?);
+}
+test "removeSegments removes a member addressed by literal key segments" {
+    var ar = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer ar.deinit();
+    const a = ar.allocator();
+    var doc = try Document.parse(a, "host:\n  example.com: 1\n  other: 2\n", .{});
+    try doc.removeSegments(&.{ "host", "example.com" });
+    var aw: std.Io.Writer.Allocating = .init(a);
+    defer aw.deinit();
+    try doc.emit(&aw.writer);
+    try std.testing.expectEqualStrings("host:\n  other: 2\n", aw.written());
+    try std.testing.expectError(error.PathNotFound, doc.removeSegments(&.{ "host", "example.com" }));
+}
+test "existing-key set via segments is byte-identical to the string-path route" {
+    var ar = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer ar.deinit();
+    const a = ar.allocator();
+    const src = "a: 1\nb: 2\n";
+
+    var via_path = try Document.parse(a, src, .{});
+    try via_path.set("a", @as(i64, 99));
+
+    var via_seg = try Document.parse(a, src, .{});
+    try via_seg.setSegments(&.{"a"}, @as(i64, 99));
+
+    var pw: std.Io.Writer.Allocating = .init(a);
+    defer pw.deinit();
+    try via_path.emit(&pw.writer);
+    var sw: std.Io.Writer.Allocating = .init(a);
+    defer sw.deinit();
+    try via_seg.emit(&sw.writer);
+
+    const wanted = "a: 99\nb: 2\n";
+    try std.testing.expectEqualStrings(wanted, pw.written());
+    try std.testing.expectEqualStrings(wanted, sw.written());
 }
 test "remove a middle mapping member deletes its whole line" {
     var ar = std.heap.ArenaAllocator.init(std.testing.allocator);

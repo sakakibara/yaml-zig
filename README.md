@@ -253,7 +253,10 @@ try doc.emit(&aw.writer);
 `set` on an existing path replaces only the value's bytes; the key, the
 `:`, comments, indentation, and siblings stay put. `set` on a missing leaf
 appends a new member to its enclosing block mapping, matching the
-indentation of the last sibling. The emitted document differs from the
+indentation of the last sibling. Missing intermediate mappings along the
+path are created too (`set("a.b.c", v)` creates `a` and `a.b` as needed,
+each nesting level indented one step deeper); sequence elements are still
+only ever replaced, never created. The emitted document differs from the
 input only where edits were applied. See `examples/edit.zig` for a
 runnable walk-through.
 
@@ -262,6 +265,20 @@ type; `addCommentBefore` / `removeCommentBefore` manage a line's leading
 `# comment`. For many edits, wrap them in `beginBatch` / `commitBatch` to
 apply the whole group with a single reparse instead of one reparse per
 edit.
+
+`Document.empty(arena, options)` bootstraps a document with no source
+bytes at all -- the first `set` splices the root mapping and the whole
+path in as one edit, for the "file doesn't exist yet" case. And
+`setValueSegments` / `setSegments` / `removeSegments` take a path as
+pre-split key segments instead of a dotted string, so a key containing a
+literal `.` is addressed unambiguously:
+
+```zig
+var doc = try yaml.Document.empty(arena, .{});
+try doc.setSegments(&.{ "host", "example.com" }, "1.2.3.4");
+// host:
+//   example.com: 1.2.3.4  -- one literal key, not nested.
+```
 
 ### Reader-backed streaming
 
@@ -514,13 +531,15 @@ mapping's keys; keys already present in the local mapping win. Set
 | Method | Purpose |
 | --- | --- |
 | `Document.parse(arena, src, options)` | Lossless parse: keeps source bytes alongside a byte-range node tree. |
+| `Document.empty(arena, options)` | Bootstrap a document with no source bytes. |
 | `doc.get(path)` / `doc.getT(T, path)` | Read a value (or typed value) by dotted path through the first document. |
-| `doc.set(path, value)` | Replace a value's bytes (comptime-dispatched on the Zig type), or append a missing leaf. |
+| `doc.set(path, value)` | Replace a value's bytes (comptime-dispatched on the Zig type), or append a missing leaf, creating missing intermediate mappings too. |
 | `doc.setValue(path, value)` | Replace a value's bytes with a dynamic `Value`. |
 | `doc.setLiteral(path, raw)` | Splice a verbatim YAML value string (validated by reparse). |
+| `doc.setSegments(segments, value)` / `doc.setValueSegments(segments, value)` | Segment-taking twins of `set` / `setValue`: a path as literal key segments, not a dotted string. |
 | `doc.setTrailingComment(path, text)` | Add, replace (`text`), or remove (`null`) a line's trailing `# comment`. |
 | `doc.addCommentBefore(path, text)` / `doc.removeCommentBefore(path)` | Add or remove a line's leading `# comment`. |
-| `doc.remove(path)` | Delete a mapping member or sequence element, whole line. |
+| `doc.remove(path)` / `doc.removeSegments(segments)` | Delete a mapping member or sequence element, whole line. |
 | `doc.beginBatch()` / `doc.commitBatch()` | Group many edits into a single reparse instead of one per edit. |
 | `doc.emit(w)` | Write the (possibly edited) document to a `*std.Io.Writer`. |
 
