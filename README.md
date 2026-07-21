@@ -255,9 +255,13 @@ try doc.emit(&aw.writer);
 appends a new member to its enclosing block mapping, matching the
 indentation of the last sibling. Missing intermediate mappings along the
 path are created too (`set("a.b.c", v)` creates `a` and `a.b` as needed,
-each nesting level indented one step deeper); sequence elements are still
-only ever replaced, never created. The emitted document differs from the
-input only where edits were applied. See `examples/edit.zig` for a
+each nesting level indented one step deeper -- sampled from an existing
+nesting level in the document, or 2 spaces when there is none to sample);
+sequence elements are still only ever replaced, never created. A created
+key is quoted whenever its plain form would misparse (e.g. `true`, `123`,
+a leading `- `), so it always reads back as the exact string requested and
+never fabricates a different structure. The emitted document differs from
+the input only where edits were applied. See `examples/edit.zig` for a
 runnable walk-through.
 
 `setValue` writes a dynamic `Value` directly instead of a comptime Zig
@@ -271,7 +275,8 @@ bytes at all -- the first `set` splices the root mapping and the whole
 path in as one edit, for the "file doesn't exist yet" case. And
 `setValueSegments` / `setSegments` / `removeSegments` take a path as
 pre-split key segments instead of a dotted string, so a key containing a
-literal `.` is addressed unambiguously:
+literal `.` is addressed unambiguously: each segment is a literal key,
+never re-split:
 
 ```zig
 var doc = try yaml.Document.empty(arena, .{});

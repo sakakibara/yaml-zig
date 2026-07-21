@@ -12,9 +12,11 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `Document.removeSegments`: segment-taking twins of `setValue` / `set` /
   `remove` that address a path as pre-split key segments (e.g.
   `&.{ "host", "example.com" }`) instead of a dotted string, so a key
-  containing a literal `.` is addressed unambiguously. The string-path
-  methods now split into segments the same way internally, so dot-free
-  paths behave identically either way.
+  containing a literal `.` is addressed unambiguously: each segment is a
+  literal key, never re-split, and (per the key-quoting fix below) a
+  created key always round-trips back to that exact string. The
+  string-path methods now split into segments the same way internally, so
+  dot-free paths behave identically either way.
 - `Document.empty`: bootstrap a document with no source bytes (the "file
   doesn't exist yet" case). The first `set` (or any segment variant)
   splices the root mapping and the whole requested path in as one edit;
@@ -29,7 +31,23 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   them as a block-mapping chain, indented one level deeper per nesting
   level, instead of returning `error.PathNotFound`. Sequence elements are
   still never created, only replaced: a `[N]` anywhere in a missing path,
-  including as the leaf, is still `error.PathNotFound`.
+  including as the leaf, is still `error.PathNotFound`. Each created
+  level's indent step is sampled from an existing nesting level in the
+  document when there is one (falling back to 2 spaces otherwise), so a
+  chain created in a 4-space document uses 4 spaces, not always 2.
+
+### Fixed
+
+- A created mapping key (via intermediate-mapping creation, the new
+  segment setters, or a plain single-level append) is now rendered through
+  the same round-trip-safe scalar quoting `set` already applies to values,
+  instead of splicing the key bytes verbatim. Previously an unquoted
+  leading `- ` key could silently fabricate a SEQUENCE instead of the
+  requested mapping member (`set` returned success while the requested key
+  never existed), and an unquoted `true`/`123`/`null`-shaped key composed
+  as a non-string key that `has`/`getT` could never read back. Both now
+  quote correctly; existing bare-key creates that need no quoting stay
+  byte-identical.
 
 ## [0.2.0] - 2026-07-05
 

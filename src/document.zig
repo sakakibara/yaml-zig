@@ -444,21 +444,42 @@ pub const Document = struct {
     }
 
     /// Append `<key>: raw` as a new member of `parent`, at the indentation
-    /// and position `memberInsertion` resolves.
+    /// and position `memberInsertion` resolves. `key` is rendered through
+    /// the same round-trip-safe quoting `raw` already got (via
+    /// `renderScalarValue`), so a key that would otherwise re-parse as a
+    /// non-string scalar or open a block construct (`true`, `123`, `- x`,
+    /// a leading `?`/`:`, embedded `: `/` #`, ...) comes out quoted instead
+    /// of silently fabricating a different structure or an unaddressable key.
     fn appendMember(self: *Document, parent: *Node, key: []const u8, raw: []const u8) Error!void {
         const ins = try self.memberInsertion(parent);
-        const text = try std.mem.concat(self.arena, u8, &.{ ins.indent, key, ": ", raw, "\n" });
+        const rendered_key = try renderScalarValue(self.arena, .{ .string = key });
+        const text = try std.mem.concat(self.arena, u8, &.{ ins.indent, rendered_key, ": ", raw, "\n" });
         return self.applyEdit(ins.at, ins.at, text);
     }
 
     /// Append a brand-new nested block-mapping chain as one member of
     /// `parent`: `keys[0]` becomes the new member's key (at `parent`'s
     /// member indentation), wrapping `keys[1]`, ... down to the leaf, whose
-    /// value is `raw`.
+    /// value is `raw`. Each level's indent step is sampled from an existing
+    /// nesting level in the document when one exists, so a created tail
+    /// matches the document's own convention instead of always assuming 2.
     fn appendMappingTail(self: *Document, parent: *Node, keys: []const []const u8, raw: []const u8) Error!void {
         const ins = try self.memberInsertion(parent);
-        const text = try renderMappingTail(self.arena, ins.indent, keys, raw);
+        const text = try renderMappingTail(self.arena, ins.indent, keys, raw, self.inferIndentStep());
         return self.applyEdit(ins.at, ins.at, text);
+    }
+
+    /// Sample the document's own nested-mapping indent step: the column of
+    /// the first member key found one level inside another member's mapping
+    /// value, minus the enclosing member's own column. Searches document
+    /// order (mapping members, then sequence elements, depth-first) and
+    /// stops at the first match. Falls back to `default_indent_step` when
+    /// the document has no such nesting to sample (flat, or brand new).
+    fn inferIndentStep(self: *const Document) usize {
+        for (self.roots) |root| {
+            if (findNestedIndentStep(self.source, root)) |step| return step;
+        }
+        return default_indent_step;
     }
 
     /// Splice `replacement` over `source[start..end)`. Outside a batch this
@@ -953,23 +974,65 @@ fn segmentsFromKeys(arena: Allocator, keys: []const []const u8) Error![]const Se
 }
 
 /// Spaces of indentation per nesting level when materializing a brand-new
-/// nested block-mapping chain (no existing sibling to infer a step from).
-/// Matches the emitter's own default `indent` option and every hand-written
-/// example in this library's docs/tests.
+/// nested block-mapping chain and the document has no existing nesting
+/// `inferIndentStep` can sample a step from. Matches the emitter's own
+/// default `indent` option and every hand-written example in this
+/// library's docs/tests.
 const default_indent_step: usize = 2;
+
+/// Column (leading-space count) of the line containing byte offset `pos`.
+fn columnOf(source: []const u8, pos: usize) usize {
+    var line_start = pos;
+    while (line_start > 0 and source[line_start - 1] != '\n') line_start -= 1;
+    return pos - line_start;
+}
+
+/// Depth-first, document-order search for the first mapping member whose
+/// value is itself a non-empty mapping: the classic "nested one level
+/// deeper" shape `inferIndentStep` samples a step from. Returns the column
+/// delta between the inner mapping's first key and the outer member's own
+/// key, or null if the subtree rooted at `node` has no such pair.
+fn findNestedIndentStep(source: []const u8, node: *const Node) ?usize {
+    switch (node.data) {
+        .scalar => return null,
+        .mapping => |members| {
+            for (members.items) |m| {
+                if (m.value.data == .mapping and m.value.data.mapping.items.len > 0) {
+                    const outer_col = columnOf(source, m.key.outer.start);
+                    const inner_col = columnOf(source, m.value.data.mapping.items[0].key.outer.start);
+                    if (inner_col > outer_col) return inner_col - outer_col;
+                }
+                if (findNestedIndentStep(source, m.value)) |step| return step;
+            }
+            return null;
+        },
+        .sequence => |items| {
+            for (items.items) |item| {
+                if (findNestedIndentStep(source, item)) |step| return step;
+            }
+            return null;
+        },
+    }
+}
 
 /// Render the block-mapping chain text for one or more newly-created
 /// nesting levels: `keys[0]` at `base_indent` wraps `keys[1]` one level
 /// deeper, and so on down to the leaf (`keys[keys.len - 1]`), whose value is
 /// `raw`. `base_indent` is the indentation the FIRST line (`keys[0]`) is
 /// inserted at -- `appendMappingTail`'s caller-determined sibling style or
-/// the empty-document bootstrap.
-fn renderMappingTail(arena: Allocator, base_indent: []const u8, keys: []const []const u8, raw: []const u8) Error![]const u8 {
+/// the empty-document bootstrap. `indent_step` spaces are added per level
+/// below the first (`inferIndentStep`'s sample, or `default_indent_step`).
+/// Every key is rendered through `renderScalarValue` -- the same round-trip
+/// -safe quoting `raw` already gets -- so a key that would otherwise
+/// re-parse as a non-string scalar or open a block construct comes out
+/// quoted instead of silently fabricating a different structure.
+fn renderMappingTail(arena: Allocator, base_indent: []const u8, keys: []const []const u8, raw: []const u8, indent_step: usize) Error![]const u8 {
     var buf: std.ArrayList(u8) = .empty;
     for (keys, 0..) |k, level| {
         try buf.appendSlice(arena, base_indent);
-        try buf.appendNTimes(arena, ' ', level * default_indent_step);
-        try buf.appendSlice(arena, k);
+        try buf.appendNTimes(arena, ' ', level * indent_step);
+        const rendered_key = try renderScalarValue(arena, .{ .string = k });
+        try buf.appendSlice(arena, rendered_key);
         if (level == keys.len - 1) {
             try buf.appendSlice(arena, ": ");
             try buf.appendSlice(arena, raw);
@@ -1853,6 +1916,87 @@ test "removeSegments removes a member addressed by literal key segments" {
     try doc.emit(&aw.writer);
     try std.testing.expectEqualStrings("host:\n  other: 2\n", aw.written());
     try std.testing.expectError(error.PathNotFound, doc.removeSegments(&.{ "host", "example.com" }));
+}
+test "setSegments quotes a leading-dash key instead of fabricating a sequence" {
+    var ar = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer ar.deinit();
+    const a = ar.allocator();
+    var doc = try Document.parse(a, "top: 1\n", .{});
+    try doc.setSegments(&.{ "m", "- x" }, @as(i64, 5));
+    var aw: std.Io.Writer.Allocating = .init(a);
+    defer aw.deinit();
+    try doc.emit(&aw.writer);
+    try std.testing.expectEqualStrings("top: 1\nm:\n  \"- x\": 5\n", aw.written());
+
+    // Re-parse independently: "m" must compose as a MAPPING holding one
+    // member keyed by the literal string "- x", never a sequence (an
+    // unquoted "- x" key would misparse as a block-sequence dash).
+    var check = try Document.parse(a, aw.written(), .{});
+    const m = check.get("m").?;
+    try std.testing.expect(m == .map);
+    try std.testing.expectEqual(@as(usize, 1), m.map.len);
+    try std.testing.expectEqualStrings("- x", m.map[0].key.string);
+    try std.testing.expectEqual(@as(i64, 5), m.map[0].value.int);
+}
+test "setSegments quotes bool/int/null-shaped keys so they read back as strings" {
+    var ar = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer ar.deinit();
+    const a = ar.allocator();
+    var doc = try Document.parse(a, "a: 1\n", .{});
+    try doc.setSegments(&.{"true"}, @as(i64, 1));
+    try doc.setSegments(&.{"123"}, @as(i64, 2));
+    try doc.setSegments(&.{"null"}, @as(i64, 3));
+    var aw: std.Io.Writer.Allocating = .init(a);
+    defer aw.deinit();
+    try doc.emit(&aw.writer);
+    try std.testing.expectEqualStrings("a: 1\n\"true\": 1\n\"123\": 2\n\"null\": 3\n", aw.written());
+
+    // Before the fix these composed as bool/int/null keys, so `has`/`getT`
+    // could never read them back; now they compose as string keys.
+    try std.testing.expectEqual(@as(i64, 1), doc.getT(i64, "true").?);
+    try std.testing.expectEqual(@as(i64, 2), doc.getT(i64, "123").?);
+    try std.testing.expectEqual(@as(i64, 3), doc.getT(i64, "null").?);
+}
+test "removeSegments removes a member whose key needed quoting to create" {
+    var ar = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer ar.deinit();
+    const a = ar.allocator();
+    var doc = try Document.parse(a, "a: 1\n", .{});
+    try doc.setSegments(&.{"true"}, @as(i64, 1));
+    try std.testing.expect(doc.has("true"));
+    try doc.removeSegments(&.{"true"});
+    try std.testing.expect(!doc.has("true"));
+    var aw: std.Io.Writer.Allocating = .init(a);
+    defer aw.deinit();
+    try doc.emit(&aw.writer);
+    try std.testing.expectEqualStrings("a: 1\n", aw.written());
+}
+test "setSegments quotes a key containing ': ' or ' #' so it can't be misread as structure" {
+    var ar = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer ar.deinit();
+    const a = ar.allocator();
+    var doc = try Document.parse(a, "top: 1\n", .{});
+    try doc.setSegments(&.{"a: b"}, @as(i64, 1)); // embedded ": " reads as a mapping value
+    try doc.setSegments(&.{"c #d"}, @as(i64, 2)); // embedded " #" reads as a comment
+    var aw: std.Io.Writer.Allocating = .init(a);
+    defer aw.deinit();
+    try doc.emit(&aw.writer);
+    try std.testing.expectEqualStrings("top: 1\n\"a: b\": 1\n\"c #d\": 2\n", aw.written());
+    try std.testing.expectEqual(@as(i64, 1), doc.getT(i64, "a: b").?);
+    try std.testing.expectEqual(@as(i64, 2), doc.getT(i64, "c #d").?);
+}
+test "set infers a 4-space document's indent step for a created nested mapping" {
+    var ar = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer ar.deinit();
+    const a = ar.allocator();
+    var doc = try Document.parse(a, "top:\n    x: 1\n", .{});
+    try doc.set("y.z", @as(i64, 2)); // "y" doesn't exist yet
+    var aw: std.Io.Writer.Allocating = .init(a);
+    defer aw.deinit();
+    try doc.emit(&aw.writer);
+    try std.testing.expectEqualStrings("top:\n    x: 1\ny:\n    z: 2\n", aw.written());
+    try std.testing.expectEqual(@as(i64, 1), doc.getT(i64, "top.x").?);
+    try std.testing.expectEqual(@as(i64, 2), doc.getT(i64, "y.z").?);
 }
 test "existing-key set via segments is byte-identical to the string-path route" {
     var ar = std.heap.ArenaAllocator.init(std.testing.allocator);
