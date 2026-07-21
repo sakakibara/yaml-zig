@@ -79,7 +79,11 @@ const GenDocument = struct {
     leaves: []const GenLeaf,
     containers: []const []const []const u8,
     comments: []const []const u8,
-    blank_lines: usize,
+    /// Every blank line and full-line comment, in the exact order they were
+    /// generated: a blank line is the sentinel `""`, a comment is its exact
+    /// text (e.g. `"# note 3"`). Checked as an in-order subsequence of the
+    /// edited output's lines -- see invariant 5 in `runCase`.
+    trivia: []const []const u8,
 };
 
 const GenCtx = struct {
@@ -89,7 +93,7 @@ const GenCtx = struct {
     leaves: std.ArrayList(GenLeaf) = .empty,
     containers: std.ArrayList([]const []const u8) = .empty,
     comments: std.ArrayList([]const u8) = .empty,
-    blank_lines: usize = 0,
+    trivia: std.ArrayList([]const u8) = .empty,
     comment_counter: usize = 0,
     fallback_counter: usize = 0,
     indent_step: usize,
@@ -115,18 +119,22 @@ fn appendSeg(arena: Allocator, prefix: []const []const u8, key: []const u8) ![]c
 
 /// A blank line, a full-line comment, or (usually) nothing, inserted before
 /// the next member. Comment text is recorded so the battery can later assert
-/// it survived an edit untouched.
+/// it survived an edit untouched; both blank lines and comments are also
+/// recorded, in generation order, into `ctx.trivia` so invariant 5 can check
+/// them positionally rather than as independent counts.
 fn maybeTrivia(ctx: *GenCtx) !void {
     switch (ctx.rng.uintLessThan(u8, 6)) {
         0 => {
             try ctx.buf.append(ctx.arena, '\n');
-            ctx.blank_lines += 1;
+            try ctx.trivia.append(ctx.arena, "");
         },
         1 => {
             const line = try std.fmt.allocPrint(ctx.arena, "# note {d}\n", .{ctx.comment_counter});
             ctx.comment_counter += 1;
             try ctx.buf.appendSlice(ctx.arena, line);
-            try ctx.comments.append(ctx.arena, line[0 .. line.len - 1]);
+            const text = line[0 .. line.len - 1];
+            try ctx.comments.append(ctx.arena, text);
+            try ctx.trivia.append(ctx.arena, text);
         },
         else => {},
     }
@@ -207,7 +215,7 @@ fn genDocument(arena: Allocator, rng: std.Random) !GenDocument {
         .leaves = try ctx.leaves.toOwnedSlice(arena),
         .containers = try ctx.containers.toOwnedSlice(arena),
         .comments = try ctx.comments.toOwnedSlice(arena),
-        .blank_lines = ctx.blank_lines,
+        .trivia = try ctx.trivia.toOwnedSlice(arena),
     };
 }
 
@@ -330,13 +338,41 @@ fn segmentsEqual(a: []const []const u8, b: []const []const u8) bool {
     return true;
 }
 
-fn countBlankLines(s: []const u8) usize {
-    var n: usize = 0;
-    var it = std.mem.splitScalar(u8, s, '\n');
-    while (it.next()) |line| {
-        if (line.len == 0) n += 1;
+/// True iff `trivia` (the source's blank lines and full-line comments, in
+/// generation order -- a blank is `""`, a comment is its exact text) occurs
+/// as an in-order subsequence of `output`'s lines, matched WHOLE-LINE (never
+/// substring) and greedily left-to-right. This is strictly stronger than a
+/// global count:
+///   - a dropped comment can't hide behind another comment whose text
+///     happens to contain it (e.g. a lost "# note 1" masked by a surviving
+///     "# note 10"), since only an EXACT line match advances the subsequence;
+///   - a lost blank line can't be papered over by an unrelated blank added
+///     elsewhere, since any trivia item still due AFTER the lost one (another
+///     blank or a comment) would then have to match past where it actually
+///     sits in `output`, which fails.
+/// The trailing empty split segment produced by `output`'s own final newline
+/// is dropped first so it can't stand in as a free extra blank-line match.
+fn triviaIsSubsequence(arena: Allocator, trivia: []const []const u8, output: []const u8) !bool {
+    var lines: std.ArrayList([]const u8) = .empty;
+    var it = std.mem.splitScalar(u8, output, '\n');
+    while (it.next()) |line| try lines.append(arena, line);
+    if (lines.items.len > 0 and output.len > 0 and output[output.len - 1] == '\n') {
+        _ = lines.pop();
     }
-    return n;
+
+    var j: usize = 0;
+    for (trivia) |t| {
+        var matched = false;
+        while (j < lines.items.len) : (j += 1) {
+            if (std.mem.eql(u8, lines.items[j], t)) {
+                j += 1;
+                matched = true;
+                break;
+            }
+        }
+        if (!matched) return false;
+    }
+    return true;
 }
 
 fn dumpCase(i: usize, seed: u64, source: []const u8, target: Target, output: []const u8) void {
@@ -433,13 +469,13 @@ fn runCase(gpa: Allocator, i: usize) !void {
         if (!v.eql(leaf.value)) return error.SiblingMismatch;
     }
 
-    // Invariant 5: every original comment's text and every blank line
-    // survive; a pure value-replace on an existing leaf is additionally
-    // byte-exact outside the replaced value token.
-    for (gen.comments) |c| {
-        if (std.mem.indexOf(u8, last_output, c) == null) return error.CommentLost;
-    }
-    if (countBlankLines(last_output) < gen.blank_lines) return error.BlankLineLost;
+    // Invariant 5: every original comment and blank line survives, in the
+    // same relative order, as an exact output line -- a positional loss
+    // can't be masked by an unrelated blank added elsewhere, and a dropped
+    // comment can't hide behind another comment's text containing it. A
+    // pure value-replace on an existing leaf is additionally byte-exact
+    // outside the replaced value token.
+    if (!try triviaIsSubsequence(arena, gen.trivia, last_output)) return error.TriviaLost;
 
     if (target.kind == .replace_existing) {
         if (target.orig_span) |sp| {
