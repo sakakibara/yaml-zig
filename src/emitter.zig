@@ -29,6 +29,7 @@ const testing = std.testing;
 const value_mod = @import("value.zig");
 const schema = @import("schema.zig");
 const decode_mod = @import("decode.zig");
+const compat = @import("compat.zig");
 
 pub const Value = value_mod.Value;
 pub const Entry = value_mod.Entry;
@@ -113,7 +114,7 @@ fn buildValue(comptime T: type, value: T, arena: std.mem.Allocator) (std.mem.All
     if (comptime (@typeInfo(T) == .@"struct" and @hasDecl(T, "toYaml"))) {
         comptime {
             const fn_info = @typeInfo(@TypeOf(T.toYaml)).@"fn";
-            if (fn_info.params.len != 2) {
+            if (compat.functionParamCount(fn_info) != 2) {
                 @compileError(@typeName(T) ++ ".toYaml must take exactly 2 params: (Self, Allocator)");
             }
         }
@@ -132,7 +133,7 @@ fn buildValue(comptime T: type, value: T, arena: std.mem.Allocator) (std.mem.All
         .float => .{ .float = @floatCast(value) },
         .pointer => |p| blk: {
             if (p.size != .slice) @compileError("yaml emitTyped: only slice pointers supported, got " ++ @typeName(T));
-            if (p.child == u8 and p.is_const) break :blk .{ .string = value };
+            if (T == []const u8) break :blk .{ .string = value };
             break :blk buildSeq(p.child, value, arena);
         },
         .array => |a| buildSeq(a.child, &value, arena),
@@ -160,7 +161,7 @@ fn buildSeq(comptime Child: type, items: []const Child, arena: std.mem.Allocator
 /// fields and tagged-union payloads inline into the parent mapping.
 /// Skipped fields are dropped; null optionals are omitted entirely.
 fn buildStructFields(comptime T: type, value: T, arena: std.mem.Allocator, entries: *std.ArrayList(Entry)) (std.mem.Allocator.Error || error{UnrepresentableInt})!void {
-    inline for (@typeInfo(T).@"struct".fields) |field| {
+    inline for (comptime compat.fields(T)) |field| {
         if (comptime decode_mod.isSkipped(T, field.name)) continue;
         const fv = @field(value, field.name);
         if (comptime decode_mod.isFlattened(T, field.name)) {
@@ -186,7 +187,7 @@ fn buildTaggedUnion(comptime T: type, value: T, arena: std.mem.Allocator) (std.m
     comptime decode_mod.validateAnnotations(T);
     const active = std.meta.activeTag(value);
     var entries: std.ArrayList(Entry) = .empty;
-    inline for (@typeInfo(T).@"union".fields) |union_field| {
+    inline for (comptime compat.fields(T)) |union_field| {
         if (active == @field(std.meta.Tag(T), union_field.name)) {
             try entries.append(arena, .{
                 .key = .{ .string = T.yaml_tag },

@@ -2475,7 +2475,15 @@ test "flow-as-key candidate buffering terminates within the bound" {
     const cap = 4096;
     try drainBoundedScan("[a, b]: value\n", cap);
     try drainBoundedScan("{a: 1}: value\n", cap);
-    try drainBoundedScan("[" ++ ("x," ** 700) ++ "x]: v\n", cap);
+    const long_flow = comptime blk: {
+        var bytes: [1400]u8 = undefined;
+        for (0..700) |i| {
+            bytes[i * 2] = 'x';
+            bytes[i * 2 + 1] = ',';
+        }
+        break :blk bytes;
+    };
+    try drainBoundedScan("[" ++ long_flow ++ "x]: v\n", cap);
     try drainBoundedScan("[a, b\n", cap);
     try drainBoundedScan("[a, b", cap);
 }

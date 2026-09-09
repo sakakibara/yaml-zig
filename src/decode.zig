@@ -37,6 +37,7 @@ const Value = value_mod.Value;
 const Entry = value_mod.Entry;
 const composer = @import("composer.zig");
 const lev = @import("levenshtein.zig");
+const compat = @import("compat.zig");
 
 pub const DecodeError = error{
     TypeMismatch,
@@ -101,7 +102,7 @@ pub fn validateAnnotations(comptime T: type) void {
     comptime {
         const kind = if (@typeInfo(T) == .@"union") "variant" else "field";
         if (@hasDecl(T, "yaml_rename")) {
-            for (@typeInfo(@TypeOf(T.yaml_rename)).@"struct".fields) |rf| {
+            for (compat.fields(@TypeOf(T.yaml_rename))) |rf| {
                 if (!@hasField(T, rf.name)) {
                     @compileError("yaml_rename entry `" ++ rf.name ++ "` does not match any " ++ kind ++ " of " ++ @typeName(T));
                 }
@@ -160,9 +161,8 @@ pub fn isFlattened(comptime T: type, comptime field_name: []const u8) bool {
 /// plus the expectedKeys of each flattened field's type (recursive).
 fn expectedKeys(comptime T: type) []const []const u8 {
     comptime {
-        const s = @typeInfo(T).@"struct";
         var keys: []const []const u8 = &.{};
-        for (s.fields) |field| {
+        for (compat.fields(T)) |field| {
             if (isSkipped(T, field.name)) continue;
             if (isFlattened(T, field.name)) {
                 const inner = expectedKeys(field.type);
@@ -227,7 +227,7 @@ fn decodeInner(comptime T: type, arena: Allocator, value: Value, options: compos
     if (comptime (@typeInfo(T) == .@"struct" and @hasDecl(T, "fromYaml"))) {
         comptime {
             const fn_info = @typeInfo(@TypeOf(T.fromYaml)).@"fn";
-            if (fn_info.params.len != 3) {
+            if (compat.functionParamCount(fn_info) != 3) {
                 @compileError(@typeName(T) ++ ".fromYaml must take exactly 3 params: (Allocator, Value, ParseOptions)");
             }
         }
@@ -259,7 +259,7 @@ fn decodeInner(comptime T: type, arena: Allocator, value: Value, options: compos
         .pointer => |p| decodePointer(T, p, arena, value, options, path),
         .array => |a| decodeArray(T, a, arena, value, options, path),
         .optional => |o| decodeOptional(o.child, arena, value, options, path),
-        .@"struct" => |s| decodeStruct(T, s, arena, value, options, path),
+        .@"struct" => decodeStruct(T, arena, value, options, path),
         .@"enum" => decodeEnum(T, value, arena, options, path),
         else => @compileError("yaml decode: unsupported type " ++ @typeName(T)),
     };
@@ -317,7 +317,7 @@ fn decodeFloat(comptime T: type, value: Value, arena: Allocator, options: compos
 
 fn decodePointer(comptime T: type, comptime p: std.builtin.Type.Pointer, arena: Allocator, value: Value, options: composer.ParseOptions, path: *PathBuilder) DecodeError!T {
     if (p.size != .slice) @compileError("yaml decode: only slice pointers supported, got " ++ @typeName(T));
-    if (p.child == u8 and p.is_const) {
+    if (T == []const u8) {
         if (value != .string) {
             if (options.errors) |list| {
                 const msg = try std.fmt.allocPrint(arena, "expected string, got {s}", .{@tagName(value)});
@@ -375,7 +375,7 @@ fn decodeOptional(comptime Child: type, arena: Allocator, value: Value, options:
     return try decodeInner(Child, arena, value, options, path);
 }
 
-fn decodeStruct(comptime T: type, comptime s: std.builtin.Type.Struct, arena: Allocator, value: Value, options: composer.ParseOptions, path: *PathBuilder) DecodeError!T {
+fn decodeStruct(comptime T: type, arena: Allocator, value: Value, options: composer.ParseOptions, path: *PathBuilder) DecodeError!T {
     comptime validateAnnotations(T);
     if (value != .map) {
         if (options.errors) |list| {
@@ -412,7 +412,7 @@ fn decodeStruct(comptime T: type, comptime s: std.builtin.Type.Struct, arena: Al
 
     var out: T = undefined;
 
-    inline for (s.fields) |field| {
+    inline for (comptime compat.fields(T)) |field| {
         if (comptime isSkipped(T, field.name)) {
             const dv = comptime field.defaultValue() orelse
                 @compileError("yaml_skip field `" ++ field.name ++ "` on " ++ @typeName(T) ++ " has no default value");
@@ -454,7 +454,7 @@ fn decodeStruct(comptime T: type, comptime s: std.builtin.Type.Struct, arena: Al
 fn variantNames(comptime T: type) []const []const u8 {
     comptime {
         var names: []const []const u8 = &.{};
-        for (@typeInfo(T).@"union".fields) |field| {
+        for (compat.fields(T)) |field| {
             names = names ++ &[_][]const u8{renamedKey(T, field.name)};
         }
         return names;
@@ -487,7 +487,7 @@ fn decodeTaggedUnion(comptime T: type, arena: Allocator, value: Value, options: 
         return error.TypeMismatch;
     }
 
-    inline for (@typeInfo(T).@"union".fields) |union_field| {
+    inline for (comptime compat.fields(T)) |union_field| {
         const variant_name = union_field.name;
         const effective_name = comptime renamedKey(T, variant_name);
         if (std.mem.eql(u8, tag_value.string, effective_name)) {
@@ -1127,19 +1127,19 @@ fn needsTreeImpl(comptime T: type, comptime seen: []const type) bool {
         if (T == Value) return true;
         const seen2 = seen ++ &[_]type{T};
         return switch (@typeInfo(T)) {
-            .@"struct" => |s| blk: {
+            .@"struct" => blk: {
                 if (@hasDecl(T, "fromYaml")) break :blk true;
-                for (s.fields) |f| {
+                for (compat.fields(T)) |f| {
                     if (isFlattened(T, f.name) and @typeInfo(f.type) != .@"struct") break :blk true;
                 }
                 if (hasKeyCollisions(T)) break :blk true;
-                for (s.fields) |f| {
+                for (compat.fields(T)) |f| {
                     if (needsTreeImpl(f.type, seen2)) break :blk true;
                 }
                 break :blk false;
             },
             .@"union" => true,
-            .pointer => |p| p.size == .slice and !(p.child == u8 and p.is_const) and needsTreeImpl(p.child, seen2),
+            .pointer => |p| p.size == .slice and T != []const u8 and needsTreeImpl(p.child, seen2),
             .array => |a| needsTreeImpl(a.child, seen2),
             .optional => |o| needsTreeImpl(o.child, seen2),
             else => false,
@@ -1161,7 +1161,7 @@ const EffField = struct {
 fn effFieldsOf(comptime T: type, comptime prefix: []const []const u8) []const EffField {
     comptime {
         var out: []const EffField = &.{};
-        for (@typeInfo(T).@"struct".fields) |f| {
+        for (compat.fields(T)) |f| {
             if (isSkipped(T, f.name)) continue;
             const p2 = prefix ++ &[_][]const u8{f.name};
             if (isFlattened(T, f.name)) {
@@ -1205,7 +1205,7 @@ fn pathPtr(comptime T: type, comptime path: []const []const u8, base: *T) *PathT
 /// Assign defaults to every `yaml_skip` field of `T`, recursing through
 /// flattened inner structs. Mirrors the skip branch of `decodeStruct`.
 fn assignSkippedDefaults(comptime T: type, comptime prefix: []const []const u8, comptime Outer: type, out: *Outer) void {
-    inline for (@typeInfo(T).@"struct".fields) |f| {
+    inline for (comptime compat.fields(T)) |f| {
         if (comptime isSkipped(T, f.name)) {
             const dv = comptime f.defaultValue() orelse
                 @compileError("yaml_skip field `" ++ f.name ++ "` on " ++ @typeName(T) ++ " has no default value");
@@ -1302,7 +1302,7 @@ fn streamValue(comptime T: type, p: *parser_mod.Parser, cook: *composer.Composer
 
 fn streamPointer(comptime T: type, comptime ptr: std.builtin.Type.Pointer, p: *parser_mod.Parser, cook: *composer.Composer, ev: Event, depth: usize, options: composer.ParseOptions) StreamError!T {
     if (comptime ptr.size != .slice) @compileError("yaml decode: only slice pointers supported, got " ++ @typeName(T));
-    if (comptime (ptr.child == u8 and ptr.is_const)) {
+    if (comptime T == []const u8) {
         // String target facing a collection event: mismatch.
         return error.TypeMismatch;
     }
@@ -1340,7 +1340,7 @@ fn streamStruct(comptime T: type, p: *parser_mod.Parser, cook: *composer.Compose
     if (depth >= options.max_depth) return error.NestingTooDeep;
 
     const eff = comptime effFieldsOf(T, &.{});
-    var seen = [_]bool{false} ** eff.len;
+    var seen: [eff.len]bool = @splat(false);
     var out: T = undefined;
     assignSkippedDefaults(T, &.{}, T, &out);
 
@@ -1390,7 +1390,7 @@ fn streamStruct(comptime T: type, p: *parser_mod.Parser, cook: *composer.Compose
         if (!seen[idx]) {
             const Parent = PathType(T, f.path[0 .. f.path.len - 1]);
             const fi = comptime blk: {
-                for (@typeInfo(Parent).@"struct".fields) |sf| {
+                for (compat.fields(Parent)) |sf| {
                     if (std.mem.eql(u8, sf.name, f.path[f.path.len - 1])) break :blk sf;
                 }
                 unreachable;

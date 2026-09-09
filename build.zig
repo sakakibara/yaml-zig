@@ -29,7 +29,7 @@ pub fn build(b: *std.Build) void {
     // an absolute path on the build host; the suite then works from any cwd
     // there (not from a test binary moved to another machine).
     const conformance_options = b.addOptions();
-    conformance_options.addOption([]const u8, "corpus_path", b.pathFromRoot("tests/corpus"));
+    conformance_options.addOption([]const u8, "corpus_path", pathFromRoot(b, "tests/corpus"));
 
     const conformance_module = b.createModule(.{
         .root_source_file = b.path("src/conformance.zig"),
@@ -58,7 +58,7 @@ pub fn build(b: *std.Build) void {
     // path, same pattern as the conformance corpus above. Excluded from
     // `zig build test`.
     const bench_options = b.addOptions();
-    bench_options.addOption([]const u8, "fixtures_path", b.pathFromRoot("bench/fixtures"));
+    bench_options.addOption([]const u8, "fixtures_path", pathFromRoot(b, "bench/fixtures"));
 
     const bench_module = b.createModule(.{
         .root_source_file = b.path("bench/main.zig"),
@@ -90,7 +90,11 @@ pub fn build(b: *std.Build) void {
     });
     b.installArtifact(fuzz_exe);
     const run_fuzz = b.addRunArtifact(fuzz_exe);
-    if (b.args) |args| run_fuzz.addArgs(args);
+    if (@hasDecl(std.Build.Step.Run, "addPassthruArgs")) {
+        run_fuzz.addPassthruArgs();
+    } else {
+        if (@field(b, "args")) |args| run_fuzz.addArgs(args);
+    }
     const fuzz_step = b.step("fuzz", "Run the random-input fuzzer (zig build fuzz -- [seed] [iterations])");
     fuzz_step.dependOn(&run_fuzz.step);
 
@@ -135,4 +139,11 @@ pub fn build(b: *std.Build) void {
     });
     const docs_step = b.step("docs", "Generate reference documentation into zig-out/docs/");
     docs_step.dependOn(&install_docs.step);
+}
+
+fn pathFromRoot(b: *std.Build, sub_path: []const u8) []const u8 {
+    if (@hasField(std.Build, "build_root")) {
+        return b.build_root.join(b.allocator, &.{sub_path}) catch @panic("out of memory");
+    }
+    return b.root.joinString(b.allocator, sub_path) catch @panic("out of memory");
 }

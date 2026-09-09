@@ -62,6 +62,7 @@ const value_mod = @import("value.zig");
 const scanner_mod = @import("scanner.zig");
 const composer = @import("composer.zig");
 const emitter = @import("emitter.zig");
+const compat = @import("compat.zig");
 
 const Value = value_mod.Value;
 const Span = value_mod.Span;
@@ -1705,12 +1706,12 @@ fn valueFromAny(arena: Allocator, comptime T: type, value: T) Error!Value {
         .comptime_float => .{ .float = value },
         .optional => |o| if (value) |inner| try valueFromAny(arena, o.child, inner) else .null,
         .pointer => |p| blk: {
-            if (p.size == .slice and p.child == u8 and p.is_const) {
+            if (comptime T == []const u8) {
                 break :blk .{ .string = try arena.dupe(u8, value) };
             }
-            if (p.size == .one and p.is_const) {
+            if (comptime p.size == .one and compat.pointerIsConst(p)) {
                 const child_info = @typeInfo(p.child);
-                if (child_info == .array and child_info.array.child == u8) {
+                if (comptime child_info == .array and child_info.array.child == u8) {
                     const as_slice: []const u8 = value;
                     break :blk .{ .string = try arena.dupe(u8, as_slice) };
                 }

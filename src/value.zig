@@ -298,7 +298,7 @@ pub const Value = union(enum) {
                 },
                 else => null,
             },
-            .pointer => |p| if (p.size == .slice and p.child == u8 and p.is_const)
+            .pointer => if (comptime T == []const u8)
                 (if (v == .string) v.string else null)
             else
                 @compileError("Value.getT: only []const u8 slices supported, got " ++ @typeName(T)),
