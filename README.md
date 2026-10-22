@@ -82,9 +82,9 @@ exe.root_module.addImport("yaml", yaml.module("yaml"));
 
 ## Compatibility
 
-- **Zig:** 0.16 (`minimum_zig_version = 0.16.0`). Port to Zig 0.17:
-  approved 2026-10-18, due 2026-11-17. It ships as 0.6.0; 0.5.x then stays
-  on a `zig-0.16` branch, with the dates listed here.
+- **Zig:** 0.16 (`minimum_zig_version = 0.16.0`). This branch carries 0.5.x
+  for Zig 0.16; its support dates are in the
+  [Compatibility section on main](https://github.com/sakakibara/yaml-zig#compatibility).
 - **Versioning:** semantic versioning. Before 1.0, a minor release (0.y.0)
   may break and a patch (0.y.z) never does. Breaking changes are listed
   under "Breaking" in the [CHANGELOG](CHANGELOG.md), and their commits are
