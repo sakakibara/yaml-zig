@@ -18,6 +18,7 @@ const diagnostic = @import("diagnostic.zig");
 const levenshtein = @import("levenshtein.zig");
 const decode_mod = @import("decode.zig");
 const emitter = @import("emitter.zig");
+const kyaml_mod = @import("kyaml.zig");
 const document = @import("document.zig");
 const stream = @import("stream.zig");
 
@@ -212,6 +213,19 @@ pub const emitStream = emitter.emitStream;
 /// decodes back via `parseInto(T, ...)`. Builds the `Value` in `arena`.
 pub const emitTyped = emitter.emitTyped;
 
+/// KYAML layout options. `compact` selects the one-line form.
+pub const KyamlOptions = kyaml_mod.KyamlOptions;
+
+/// Emit one `Value` as KYAML: a `---` header, flow collections, and a
+/// trailing newline. Strings are double-quoted. See `kyaml.zig`.
+pub const emitKyaml = kyaml_mod.emitKyaml;
+
+/// Emit every document as KYAML, each with its own `---` header.
+pub const emitKyamlStream = kyaml_mod.emitKyamlStream;
+
+/// Emit a typed Zig value as KYAML, using the same conversion as `emitTyped`.
+pub const emitKyamlTyped = kyaml_mod.emitKyamlTyped;
+
 /// Lossless document model: parse keeping the source bytes and a byte-range
 /// node tree, read through values by path, edit with minimal diffs, and emit
 /// byte-identically when unmodified. See `document.zig`.
@@ -242,6 +256,7 @@ pub const StreamError = stream.StreamError;
 test {
     std.testing.refAllDecls(@This());
     std.testing.refAllDecls(emitter);
+    std.testing.refAllDecls(kyaml_mod);
     std.testing.refAllDecls(diagnostic);
     std.testing.refAllDecls(levenshtein);
     std.testing.refAllDecls(decode_mod);

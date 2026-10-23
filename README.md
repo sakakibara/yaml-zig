@@ -253,6 +253,32 @@ annotations would silently not apply.
 For tagged unions (`yaml_tag`), the discriminator key is emitted first with
 the payload's fields inline, so the output decodes back via `parseInto`.
 
+### Emit (KYAML)
+
+KYAML is a strict subset of YAML used by Kubernetes (`kubectl get -o kyaml`).
+`emitKyaml`, `emitKyamlStream`, and `emitKyamlTyped` write it. The block
+emitter is unchanged.
+
+```zig
+try yaml.emitKyaml(&aw.writer, v, .{});
+try yaml.emitKyaml(&aw.writer, v, .{ .compact = true });
+```
+
+Every document starts with `---`. Mappings are `{}`, lists are `[]`, and a
+comma follows every entry. A list whose items are only mappings or lists
+keeps those brackets together on one line. `compact` puts the document on
+one line, separates entries with `, `, and drops the trailing comma.
+Strings are double-quoted. A key is quoted only when a YAML reader could
+take it for a boolean, number, null, timestamp, or sexagesimal value
+(`yes`, `0123`, `2006-1-2`). Numbers, booleans, and null use the same
+spelling as `emit` (`null`, `true`, `1.0`, `.nan`). A list or mapping used
+as a key returns `error.UnrepresentableScalar`. Comments are not kept.
+Bytes that are not UTF-8 are written as `\xNN`.
+
+The layout matches `sigs.k8s.io/yaml/kyaml` v1.6.0. `tests/kyaml/` holds
+inputs and the encoder's output; `go run tools/kyaml-golden/main.go`
+regenerates the output files.
+
 ### Document model (lossless editing)
 
 Parse a YAML file, edit values in place, and emit byte-identical output
@@ -567,6 +593,9 @@ mapping's keys; keys already present in the local mapping win. Set
 | `emit(w, value, options)` | Emit one `Value` as block YAML. |
 | `emitStream(w, values, options)` | Emit a slice of documents, `---`-separated. |
 | `emitTyped(w, value, arena, options)` | Emit a typed value, honoring annotations and hooks. |
+| `emitKyaml(w, value, options)` | Emit one `Value` as KYAML. |
+| `emitKyamlStream(w, values, options)` | Emit every document as KYAML, each with a `---` header. |
+| `emitKyamlTyped(w, value, arena, options)` | Emit a typed value as KYAML. |
 | `cookScalarText(arena, src, event)` | Cook a scalar event to its presentation text. |
 | `tagOf(schema, plain)` | Name the type a schema's grammar gives a plain scalar. |
 | `isPlainSafe(s, context)` | Whether `s` can be written as a plain scalar - a value or an implicit key, in block or flow context - and read back as this string by the readers `emit` accounts for; a non-breaking release may only make it stricter. |
@@ -604,7 +633,7 @@ mapping's keys; keys already present in the local mapping win. Set
 
 `Value`, `Entry`, `Span`, `Spans`, `Schema`, `Tag`, `Scanner`, `Token`,
 `TokenKind`, `ScalarStyle`, `Parser`, `Event`, `EventKind`, `ParseOptions`,
-`EmitOptions`, `Diagnostic`, `Error`, `ReaderError`, `DecodeError`,
+`EmitOptions`, `KyamlOptions`, `Diagnostic`, `Error`, `ReaderError`, `DecodeError`,
 `EmitError`, `Document`, `DocumentError`, `EventReader`, `ValueStream`,
 `StreamError`.
 

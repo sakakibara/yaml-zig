@@ -1,0 +1,5 @@
+meta:
+  name: web
+  ports:
+    - 80
+    - 443

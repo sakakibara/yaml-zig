@@ -1,0 +1,2 @@
+---
+{"nan": .nan, "inf": .inf, neginf: -.inf, whole: 1.0, ratio: 1.5}

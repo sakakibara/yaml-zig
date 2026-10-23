@@ -6,6 +6,12 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `emitKyaml`, `emitKyamlStream`, and `emitKyamlTyped` write KYAML. Output
+  matches `sigs.k8s.io/yaml/kyaml` v1.6.0. `KyamlOptions.compact` selects
+  the one-line form. The block emitter is unchanged. Comments are not kept.
+
 ## [0.6.0] - 2026-10-22
 
 ### Breaking

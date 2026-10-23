@@ -1,0 +1,2 @@
+---
+{hello: "x", hello-world: "x", hello_world: "x", "yes": "x", "no": "x", "on": "x", "off": "x", "y": "x", "n": "x", "true": "x", "null": "x", "1234": "x", "0123": "x", "0xff": "x", "1e10": "x", ".inf": "x", "1:00": "x", "1:60": "x", "2006-1-2": "x", a.b: "x", a/b: "x"}

@@ -103,9 +103,14 @@ pub fn emitStream(w: *Io.Writer, values: []const Value, options: EmitOptions) Em
 /// `yaml_rename` / `yaml_skip` / `yaml_flatten` / `yaml_tag` would silently
 /// not apply.
 pub fn emitTyped(w: *Io.Writer, value: anytype, arena: std.mem.Allocator, options: EmitOptions) EmitError!void {
-    const T = @TypeOf(value);
-    const built = try buildValue(T, value, arena);
+    const built = try reflectValue(value, arena);
     try emit(w, built, options);
+}
+
+/// Reflect `value` into a `Value` the way `emitTyped` does, without writing it.
+/// The KYAML emitter uses this so typed output shares one conversion.
+pub fn reflectValue(value: anytype, arena: std.mem.Allocator) (std.mem.Allocator.Error || error{UnrepresentableInt})!Value {
+    return buildValue(@TypeOf(value), value, arena);
 }
 
 /// Reflect `value` of type `T` into a `Value`, honoring the same
@@ -203,6 +208,15 @@ fn buildTaggedUnion(comptime T: type, value: T, arena: std.mem.Allocator) (std.m
         }
     }
     return .{ .map = entries.items };
+}
+
+/// Write a null, bool, int, or float the way `emit` writes it.
+/// Strings and collections return `UnrepresentableScalar`.
+pub fn writeDataScalar(w: *Io.Writer, value: Value) EmitError!void {
+    switch (value) {
+        .null, .bool, .int, .float => try emitScalar(w, value),
+        else => return error.UnrepresentableScalar,
+    }
 }
 
 /// Render a scalar `Value` to its YAML scalar bytes (no trailing newline),
