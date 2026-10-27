@@ -1195,7 +1195,7 @@ fn percentDecode(a: std.mem.Allocator, s: []const u8) Error![]const u8 {
             const hi = hexDigit(s[i + 1]);
             const lo = hexDigit(s[i + 2]);
             if (hi != null and lo != null) {
-                try out.append(a, hi.? << 4 | lo.?);
+                try out.append(a, (hi.? << 4) | lo.?);
                 i += 3;
                 continue;
             }
