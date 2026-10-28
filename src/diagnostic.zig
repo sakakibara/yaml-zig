@@ -117,7 +117,7 @@ pub const Sink = struct {
     pub fn failFmt(self: *Sink, span: Span, comptime fmt: []const u8, args: anytype) error{ YamlParseError, OutOfMemory } {
         self.error_count += 1;
         if (self.errors) |list| {
-            const msg = std.fmt.allocPrint(self.arena, fmt, args) catch return error.OutOfMemory;
+            const msg = self.arena.print(fmt, args) catch return error.OutOfMemory;
             list.append(self.arena, .{ .message = msg, .span = span }) catch return error.OutOfMemory;
         }
         return error.YamlParseError;

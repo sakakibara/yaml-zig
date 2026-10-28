@@ -1,4 +1,4 @@
-//! Microbenchmarks. Always built ReleaseFast (see build.zig).
+//! Microbenchmarks. Always built in the fast optimize mode (see build.zig).
 //!
 //! Each benchmark runs `warmup_count` untimed iterations, then
 //! `sample_count` timed ones, and reports min/p50/p99/max latency plus
@@ -102,7 +102,7 @@ pub fn main(init: std.process.Init) !void {
     // parse: exactly one document. Only single-document fixtures qualify;
     // the medium manifest is multi-document, so it is skipped here.
     for (fixture_names, fixtures) |name, src| {
-        if (std.mem.indexOf(u8, src, "\n---\n") != null) continue;
+        if (std.mem.find(u8, src, "\n---\n") != null) continue;
         try benchParse(io, gpa, "parse", name, src);
     }
     for (fixture_names, fixtures) |name, src| {
@@ -323,10 +323,10 @@ fn report(label: []const u8, fixture: []const u8, bytes: usize, samples: []u64) 
         (@as(f64, @floatFromInt(p50)) / std.time.ns_per_s);
 
     var name_buf: [64]u8 = undefined;
-    const name = std.fmt.bufPrint(&name_buf, "{s} {s}", .{ label, fixture }) catch label;
+    const name = std.mem.print(&name_buf, "{s} {s}", .{ label, fixture }) catch label;
 
     var size_buf: [16]u8 = undefined;
-    const size = std.fmt.bufPrint(&size_buf, "{Bi:.1}", .{bytes}) catch "?";
+    const size = std.mem.print(&size_buf, "{Bi:.1}", .{bytes}) catch "?";
 
     std.debug.print("{s:<34} {s:>9} {s:>10} {s:>10} {s:>10} {s:>10} {d:>9.1}\n", .{
         name, size, fmtNs(min), fmtNs(p50), fmtNs(p99), fmtNs(max), mbps,
@@ -343,9 +343,9 @@ fn fmtNs(ns: u64) []const u8 {
     ns_buf_idx = (ns_buf_idx + 1) % ns_bufs.len;
     const f = @as(f64, @floatFromInt(ns));
     return if (ns < 1_000)
-        std.fmt.bufPrint(buf, "{d} ns", .{ns}) catch "?"
+        std.mem.print(buf, "{d} ns", .{ns}) catch "?"
     else if (ns < 1_000_000)
-        std.fmt.bufPrint(buf, "{d:.2} us", .{f / 1_000.0}) catch "?"
+        std.mem.print(buf, "{d:.2} us", .{f / 1_000.0}) catch "?"
     else
-        std.fmt.bufPrint(buf, "{d:.2} ms", .{f / 1_000_000.0}) catch "?";
+        std.mem.print(buf, "{d:.2} ms", .{f / 1_000_000.0}) catch "?";
 }

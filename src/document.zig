@@ -391,7 +391,7 @@ pub const Document = struct {
             _ = composer.parse(self.arena, raw, self.options) catch return error.InvalidValue;
             return;
         };
-        if (std.mem.indexOfAny(u8, raw, "\r\n") != null) return error.InvalidValue;
+        if (std.mem.findAny(u8, raw, "\r\n") != null) return error.InvalidValue;
         const text = switch (f) {
             .sequence => try std.mem.concat(self.arena, u8, &.{ "[", raw, "]" }),
             .mapping => try std.mem.concat(self.arena, u8, &.{ "{k: ", raw, "}" }),
@@ -634,7 +634,7 @@ pub const Document = struct {
         var line_start = start;
         while (line_start > 0 and self.source[line_start - 1] != '\n') line_start -= 1;
         const prefix = self.source[line_start..start];
-        const indent = if (std.mem.indexOfNone(u8, prefix, " \t") == null) prefix else if (last.explicit != null) try spaces(self.arena, start - line_start) else return error.InvalidValue;
+        const indent = if (std.mem.findNone(u8, prefix, " \t") == null) prefix else if (last.explicit != null) try spaces(self.arena, start - line_start) else return error.InvalidValue;
 
         // Insert after the LINE end of the last sibling's value (not the raw
         // value-span end), so any trailing comment or whitespace on that line
@@ -970,7 +970,7 @@ pub const Document = struct {
         // A newline in the comment text would inject real YAML structure that
         // survives reparse; reject before touching the document (atomic).
         if (text) |t| {
-            if (std.mem.indexOfAny(u8, t, "\n\r") != null) return error.InvalidComment;
+            if (std.mem.findAny(u8, t, "\n\r") != null) return error.InvalidComment;
         }
         if (self.roots.len == 0) return error.PathNotFound;
         const node = resolveNode(self.roots[0], path) orelse return error.PathNotFound;
@@ -1043,7 +1043,7 @@ pub const Document = struct {
     /// `error.PathNotFound`.
     pub fn addCommentBefore(self: *Document, path: []const u8, text: []const u8) Error!void {
         // A newline would inject real YAML structure; reject before mutating.
-        if (std.mem.indexOfAny(u8, text, "\n\r") != null) return error.InvalidComment;
+        if (std.mem.findAny(u8, text, "\n\r") != null) return error.InvalidComment;
         if (self.roots.len == 0) return error.PathNotFound;
         const r = resolveWithParent(self.roots[0], path) orelse return error.PathNotFound;
         const anchor = commentAnchor(r);
@@ -1458,7 +1458,7 @@ fn buildNode(arena: Allocator, ts: *TokenStream, max_depth: usize, depth: usize)
     // belong to that key, not to the mapping.
     if (props_end) |end| if (ts.peekKind() == .block_mapping_start) {
         const start = tokStart(ts.peek().?);
-        if (start >= end and std.mem.indexOfScalar(u8, ts.src[end..start], '\n') == null) {
+        if (start >= end and std.mem.findScalar(u8, ts.src[end..start], '\n') == null) {
             ts.key_anchor = anchor;
             anchor = null;
         }
@@ -1798,8 +1798,8 @@ fn propsOfKeyAt(ts: *const TokenStream, first: usize) bool {
     var line_start = props_start;
     while (line_start > 0 and ts.src[line_start - 1] != '\n') line_start -= 1;
     // On the key's line, and first on that line: not trailing the `:`.
-    return std.mem.indexOfScalar(u8, ts.src[props_start..key_start], '\n') == null and
-        std.mem.indexOfNone(u8, ts.src[line_start..props_start], " \t") == null;
+    return std.mem.findScalar(u8, ts.src[props_start..key_start], '\n') == null and
+        std.mem.findNone(u8, ts.src[line_start..props_start], " \t") == null;
 }
 
 /// A mapping key's identity: its cooked text, through an alias to the
@@ -3572,7 +3572,7 @@ test "an anchor or tag written before an implicit key belongs to the key" {
         const path = if (src[0] == '-') "[0].m.k" else "m.k";
         try doc.set(path, @as(i64, 3));
         const out = try emitToString(a, &doc);
-        std.testing.expect(std.mem.indexOf(u8, out, "*a : 3") != null) catch |e| {
+        std.testing.expect(std.mem.find(u8, out, "*a : 3") != null) catch |e| {
             std.debug.print("{s} ->\n{s}\n", .{ src, out });
             return e;
         };

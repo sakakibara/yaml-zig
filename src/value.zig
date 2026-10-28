@@ -139,7 +139,7 @@ pub const PathIterator = struct {
     pub fn next(self: *PathIterator) ?Segment {
         if (self.pos >= self.path.len) return null;
         if (self.path[self.pos] == '[') {
-            if (std.mem.indexOfScalarPos(u8, self.path, self.pos + 1, ']')) |close| {
+            if (std.mem.findScalarPos(u8, self.path, self.pos + 1, ']')) |close| {
                 const interior = self.path[self.pos + 1 .. close];
                 self.pos = close + 1;
                 self.tail_start = self.pos;
@@ -150,7 +150,7 @@ pub const PathIterator = struct {
             // Unclosed bracket: the bytes up to the next `.` (or the
             // end) form one raw segment; later `.`-separated segments
             // still iterate so `tail_start` stays exact.
-            self.pos = std.mem.indexOfScalarPos(u8, self.path, self.pos + 1, '.') orelse self.path.len;
+            self.pos = std.mem.findScalarPos(u8, self.path, self.pos + 1, '.') orelse self.path.len;
             self.skipDot();
             return .raw;
         }

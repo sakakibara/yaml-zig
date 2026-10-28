@@ -519,7 +519,13 @@ pub const Scanner = struct {
             }
             const n = std.unicode.utf8ByteSequenceLength(lead) catch return self.badUtf8(i, false);
             if (i + n > self.input.len) return self.badUtf8(i, completable(self.input[i..]));
-            _ = std.unicode.utf8Decode(self.input[i .. i + n]) catch return self.badUtf8(i, false);
+            const seq = self.input[i .. i + n];
+            _ = switch (n) {
+                2 => std.unicode.utf8Decode2(seq[0..2].*),
+                3 => std.unicode.utf8Decode3(seq[0..3].*),
+                4 => std.unicode.utf8Decode4(seq[0..4].*),
+                else => unreachable,
+            } catch return self.badUtf8(i, false);
             self.utf8_checked = i + n;
         }
     }
@@ -531,7 +537,13 @@ pub const Scanner = struct {
         for ([_]u8{ 0x80, 0xBF }) |fill| {
             var buf: [4]u8 = @splat(fill);
             @memcpy(buf[0..prefix.len], prefix);
-            if (std.unicode.utf8Decode(buf[0..n])) |_| return true else |_| {}
+            const decoded = switch (n) {
+                2 => std.unicode.utf8Decode2(buf[0..2].*),
+                3 => std.unicode.utf8Decode3(buf[0..3].*),
+                4 => std.unicode.utf8Decode4(buf[0..4].*),
+                else => unreachable,
+            };
+            if (decoded) |_| return true else |_| {}
         }
         return false;
     }
@@ -1007,7 +1019,7 @@ pub const Scanner = struct {
         // (Flow context handles its own multi-line keys via single-pair
         // promotion.)
         if (is_key and !in_flow and
-            std.mem.indexOfScalar(u8, self.input[node.span.start..node.span.end], '\n') != null)
+            std.mem.findScalar(u8, self.input[node.span.start..node.span.end], '\n') != null)
         {
             self.enqueue(.{ .kind = .invalid, .span = node.span, .invalid_reason = .multiline_implicit_key });
             return;
@@ -2135,7 +2147,7 @@ fn firstScalar(src: []const u8) ?Token {
 test "tab used as indentation is invalid" {
     var buf: [16]TokenKind = undefined;
     const n = try kinds("a:\n\tb: 1\n", &buf);
-    try std.testing.expect(std.mem.indexOfScalar(TokenKind, buf[0..n], .invalid) != null);
+    try std.testing.expect(std.mem.findScalar(TokenKind, buf[0..n], .invalid) != null);
 }
 
 test "leading tab before a flow collection is separation, not indentation" {
@@ -2143,12 +2155,12 @@ test "leading tab before a flow collection is separation, not indentation" {
     // A tab before a flow collection is separation white space; the flow
     // content carries no indentation, so no `.invalid` is produced.
     var n = try kinds("\t[\n\t]\n", &buf);
-    try std.testing.expect(std.mem.indexOfScalar(TokenKind, buf[0..n], .invalid) == null);
+    try std.testing.expect(std.mem.findScalar(TokenKind, buf[0..n], .invalid) == null);
     n = try kinds("\t{}\n", &buf);
-    try std.testing.expect(std.mem.indexOfScalar(TokenKind, buf[0..n], .invalid) == null);
+    try std.testing.expect(std.mem.findScalar(TokenKind, buf[0..n], .invalid) == null);
     // A leading tab before block content is still invalid indentation.
     n = try kinds("\tkey: v\n", &buf);
-    try std.testing.expect(std.mem.indexOfScalar(TokenKind, buf[0..n], .invalid) != null);
+    try std.testing.expect(std.mem.findScalar(TokenKind, buf[0..n], .invalid) != null);
 }
 
 test "CRLF carriage return is excluded from scalar spans" {
@@ -2180,7 +2192,7 @@ test "double and single quoted scalars carry style" {
 test "unterminated quoted scalar is invalid" {
     var buf: [8]TokenKind = undefined;
     const n = try kinds("'oops\n", &buf);
-    try std.testing.expect(std.mem.indexOfScalar(TokenKind, buf[0..n], .invalid) != null);
+    try std.testing.expect(std.mem.findScalar(TokenKind, buf[0..n], .invalid) != null);
 }
 
 test "literal and folded block scalars" {
@@ -2228,8 +2240,8 @@ test "block scalar body span covers indented lines" {
 test "anchor, alias, and tag tokens" {
     var buf: [24]TokenKind = undefined;
     const n = try kinds("- &a 1\n- *a\n", &buf);
-    try std.testing.expect(std.mem.indexOfScalar(TokenKind, buf[0..n], .anchor) != null);
-    try std.testing.expect(std.mem.indexOfScalar(TokenKind, buf[0..n], .alias) != null);
+    try std.testing.expect(std.mem.findScalar(TokenKind, buf[0..n], .anchor) != null);
+    try std.testing.expect(std.mem.findScalar(TokenKind, buf[0..n], .alias) != null);
     var s: Scanner = .init("!!str x\n");
     var sawtag = false;
     while (s.next()) |t| {
@@ -2262,19 +2274,19 @@ test "flow collections" {
     var buf: [32]TokenKind = undefined;
     const n = try kinds("{a: 1, b: [2, 3]}\n", &buf);
     try std.testing.expectEqual(TokenKind.flow_mapping_start, buf[1]);
-    try std.testing.expect(std.mem.indexOfScalar(TokenKind, buf[0..n], .flow_sequence_start) != null);
-    try std.testing.expect(std.mem.indexOfScalar(TokenKind, buf[0..n], .flow_entry) != null);
-    try std.testing.expect(std.mem.indexOfScalar(TokenKind, buf[0..n], .flow_mapping_end) != null);
+    try std.testing.expect(std.mem.findScalar(TokenKind, buf[0..n], .flow_sequence_start) != null);
+    try std.testing.expect(std.mem.findScalar(TokenKind, buf[0..n], .flow_entry) != null);
+    try std.testing.expect(std.mem.findScalar(TokenKind, buf[0..n], .flow_mapping_end) != null);
 }
 
 test "flow suspends block indentation" {
     // Indented content inside a flow collection produces no block_*_start.
     var buf: [32]TokenKind = undefined;
     const n = try kinds("[\n  1,\n  2,\n]\n", &buf);
-    try std.testing.expect(std.mem.indexOfScalar(TokenKind, buf[0..n], .block_sequence_start) == null);
-    try std.testing.expect(std.mem.indexOfScalar(TokenKind, buf[0..n], .block_mapping_start) == null);
-    try std.testing.expect(std.mem.indexOfScalar(TokenKind, buf[0..n], .flow_sequence_start) != null);
-    try std.testing.expect(std.mem.indexOfScalar(TokenKind, buf[0..n], .flow_sequence_end) != null);
+    try std.testing.expect(std.mem.findScalar(TokenKind, buf[0..n], .block_sequence_start) == null);
+    try std.testing.expect(std.mem.findScalar(TokenKind, buf[0..n], .block_mapping_start) == null);
+    try std.testing.expect(std.mem.findScalar(TokenKind, buf[0..n], .flow_sequence_start) != null);
+    try std.testing.expect(std.mem.findScalar(TokenKind, buf[0..n], .flow_sequence_end) != null);
 }
 
 test "flow as a block mapping value" {
@@ -2293,17 +2305,17 @@ test "flow as a block mapping value" {
 test "document markers and directives" {
     var buf: [24]TokenKind = undefined;
     const n = try kinds("%YAML 1.2\n---\na: 1\n...\n", &buf);
-    try std.testing.expect(std.mem.indexOfScalar(TokenKind, buf[0..n], .directive) != null);
-    try std.testing.expect(std.mem.indexOfScalar(TokenKind, buf[0..n], .document_start) != null);
-    try std.testing.expect(std.mem.indexOfScalar(TokenKind, buf[0..n], .document_end) != null);
+    try std.testing.expect(std.mem.findScalar(TokenKind, buf[0..n], .directive) != null);
+    try std.testing.expect(std.mem.findScalar(TokenKind, buf[0..n], .document_start) != null);
+    try std.testing.expect(std.mem.findScalar(TokenKind, buf[0..n], .document_end) != null);
 }
 
 test "document start closes open block collections" {
     var buf: [32]TokenKind = undefined;
     const n = try kinds("a: 1\n---\nb: 2\n", &buf);
     // The block_end for the first mapping must precede document_start.
-    const ds = std.mem.indexOfScalar(TokenKind, buf[0..n], .document_start).?;
-    const be = std.mem.indexOfScalar(TokenKind, buf[0..n], .block_end).?;
+    const ds = std.mem.findScalar(TokenKind, buf[0..n], .document_start).?;
+    const be = std.mem.findScalar(TokenKind, buf[0..n], .block_end).?;
     try std.testing.expect(be < ds);
 }
 
@@ -2346,8 +2358,8 @@ test "CRLF: dash before digit is not a block entry" {
     // x: -3\r\n must scan -3 as a plain scalar, not a block entry.
     var buf: [32]TokenKind = undefined;
     const n = try kinds("x: -3\r\n", &buf);
-    try std.testing.expect(std.mem.indexOfScalar(TokenKind, buf[0..n], .block_entry) == null);
-    try std.testing.expect(std.mem.indexOfScalar(TokenKind, buf[0..n], .scalar) != null);
+    try std.testing.expect(std.mem.findScalar(TokenKind, buf[0..n], .block_entry) == null);
+    try std.testing.expect(std.mem.findScalar(TokenKind, buf[0..n], .scalar) != null);
 }
 
 // Explicit block-mapping keys (? key / : value)
@@ -2376,13 +2388,13 @@ test "node property alone at the mapping's own indent is invalid" {
     // mis-indented; an indented property (`seq:\n &anchor\n- a`) is fine.
     var buf: [24]TokenKind = undefined;
     var n = try kinds("seq:\n&anchor\n- a\n", &buf);
-    try std.testing.expect(std.mem.indexOfScalar(TokenKind, buf[0..n], .invalid) != null);
+    try std.testing.expect(std.mem.findScalar(TokenKind, buf[0..n], .invalid) != null);
     n = try kinds("seq:\n &anchor\n- a\n", &buf);
-    try std.testing.expect(std.mem.indexOfScalar(TokenKind, buf[0..n], .invalid) == null);
+    try std.testing.expect(std.mem.findScalar(TokenKind, buf[0..n], .invalid) == null);
     // A property followed on the same line by its key is valid even at the
     // mapping's indent (`!!str a: b`).
     n = try kinds("!!str a: b\n", &buf);
-    try std.testing.expect(std.mem.indexOfScalar(TokenKind, buf[0..n], .invalid) == null);
+    try std.testing.expect(std.mem.findScalar(TokenKind, buf[0..n], .invalid) == null);
 }
 
 test "explicit ? key opens a block mapping and : provides the value" {
@@ -2414,18 +2426,18 @@ test "tab as a separator after an indicator is valid, as indentation is not" {
     try std.testing.expect(firstScalar("- foo:\tbar\n") != null);
     var buf: [16]TokenKind = undefined;
     var n = try kinds("-\tbaz\n", &buf);
-    try std.testing.expect(std.mem.indexOfScalar(TokenKind, buf[0..n], .invalid) == null);
-    try std.testing.expect(std.mem.indexOfScalar(TokenKind, buf[0..n], .block_entry) != null);
+    try std.testing.expect(std.mem.findScalar(TokenKind, buf[0..n], .invalid) == null);
+    try std.testing.expect(std.mem.findScalar(TokenKind, buf[0..n], .block_entry) != null);
 
     // A tab before a node that OPENS a block collection is illegal indentation.
     n = try kinds("-\t-\n", &buf); // nested compact sequence
-    try std.testing.expect(std.mem.indexOfScalar(TokenKind, buf[0..n], .invalid) != null);
+    try std.testing.expect(std.mem.findScalar(TokenKind, buf[0..n], .invalid) != null);
     n = try kinds("?\tkey:\n", &buf); // key opening a block mapping
-    try std.testing.expect(std.mem.indexOfScalar(TokenKind, buf[0..n], .invalid) != null);
+    try std.testing.expect(std.mem.findScalar(TokenKind, buf[0..n], .invalid) != null);
 
     // A tab in leading indentation (line start) remains illegal.
     n = try kinds("a:\n\tb: 1\n", &buf);
-    try std.testing.expect(std.mem.indexOfScalar(TokenKind, buf[0..n], .invalid) != null);
+    try std.testing.expect(std.mem.findScalar(TokenKind, buf[0..n], .invalid) != null);
 }
 
 test "explicit key mixes with implicit entries" {
@@ -2542,7 +2554,7 @@ test "a multi-line flow node is not promoted to a block simple key" {
     // so no `key` indicator is spliced ahead of its `flow_sequence_start`.
     var buf: [32]TokenKind = undefined;
     const n = try kinds("[a,\nb]: c\n", &buf);
-    const fss = std.mem.indexOfScalar(TokenKind, buf[0..n], .flow_sequence_start).?;
+    const fss = std.mem.findScalar(TokenKind, buf[0..n], .flow_sequence_start).?;
     try std.testing.expect(fss == 0 or buf[fss - 1] != .key);
 }
 
@@ -2552,7 +2564,7 @@ test "flow-as-key opening a block mapping after an inline value is invalid" {
     // plain/quoted key guard.
     var buf: [64]TokenKind = undefined;
     const n = try kinds("a: [x]: y\n", &buf);
-    try std.testing.expect(std.mem.indexOfScalar(TokenKind, buf[0..n], .invalid) != null);
+    try std.testing.expect(std.mem.findScalar(TokenKind, buf[0..n], .invalid) != null);
 }
 
 test "flow-as-key candidate buffering terminates within the bound" {

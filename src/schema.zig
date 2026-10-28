@@ -260,7 +260,7 @@ fn unsigned(plain: []const u8) []const u8 {
 }
 
 fn allOf(s: []const u8, chars: []const u8) bool {
-    for (s) |c| if (std.mem.indexOfScalar(u8, chars, c) == null) return false;
+    for (s) |c| if (std.mem.findScalar(u8, chars, c) == null) return false;
     return true;
 }
 
@@ -276,7 +276,7 @@ fn isYaml11IntGrammar(plain: []const u8) bool {
     if (s.len > 2 and std.mem.startsWith(u8, s, "0x")) return allOf(s[2..], hex_chars ++ "_");
     if (s[0] == '0') return s.len == 1 or allOf(s[1..], "01234567_");
     if (s[0] < '1' or s[0] > '9') return false;
-    const colon = std.mem.indexOfScalar(u8, s, ':') orelse return allOf(s, decimal_chars ++ "_");
+    const colon = std.mem.findScalar(u8, s, ':') orelse return allOf(s, decimal_chars ++ "_");
     return allOf(s[0..colon], decimal_chars ++ "_") and isSexagesimalTail(s[colon..]);
 }
 
@@ -303,9 +303,9 @@ fn isSexagesimalTail(tail: []const u8) bool {
 fn isYaml11FloatGrammar(plain: []const u8) bool {
     if (coreInfNan(plain) != null) return true;
     const s = unsigned(plain);
-    const dot = std.mem.indexOfScalar(u8, s, '.') orelse return false;
+    const dot = std.mem.findScalar(u8, s, '.') orelse return false;
     const head = s[0..dot];
-    if (std.mem.indexOfScalar(u8, head, ':')) |colon| {
+    if (std.mem.findScalar(u8, head, ':')) |colon| {
         // Base 60: the fraction takes digits and `_`.
         return head.len > 0 and std.ascii.isDigit(head[0]) and
             allOf(head[0..colon], decimal_chars ++ "_") and isSexagesimalTail(head[colon..]) and
@@ -313,7 +313,7 @@ fn isYaml11FloatGrammar(plain: []const u8) bool {
     }
     if (head.len > 0 and !(std.ascii.isDigit(head[0]) and allOf(head, decimal_chars ++ "_"))) return false;
     var rest = s[dot + 1 ..];
-    if (std.mem.indexOfAny(u8, rest, "eE")) |e| {
+    if (std.mem.findAny(u8, rest, "eE")) |e| {
         const exp = rest[e + 1 ..];
         if (exp.len < 2 or (exp[0] != '+' and exp[0] != '-') or !allOf(exp[1..], decimal_chars)) return false;
         rest = rest[0..e];
@@ -374,7 +374,7 @@ const Cursor = struct {
 fn yaml11IntValue(arena: std.mem.Allocator, plain: []const u8) std.mem.Allocator.Error!Value {
     const neg = plain.len > 0 and plain[0] == '-';
     const s = unsigned(plain);
-    if (std.mem.indexOfScalar(u8, s, ':') == null) {
+    if (std.mem.findScalar(u8, s, ':') == null) {
         const base: u8, const body = if (std.mem.startsWith(u8, s, "0b"))
             .{ 2, s[2..] }
         else if (std.mem.startsWith(u8, s, "0x"))
@@ -387,7 +387,7 @@ fn yaml11IntValue(arena: std.mem.Allocator, plain: []const u8) std.mem.Allocator
         return wholeNumber(arena, neg, base, try withoutUnderscores(arena, body));
     }
     // At least its first group times 60 per further group.
-    const first = try withoutUnderscores(arena, s[0..std.mem.indexOfScalar(u8, s, ':').?]);
+    const first = try withoutUnderscores(arena, s[0..std.mem.findScalar(u8, s, ':').?]);
     const bits = @as(f64, @floatFromInt(first.len - 1)) * std.math.log2(10.0) +
         @as(f64, @floatFromInt(std.mem.count(u8, s, ":"))) * std.math.log2(60.0);
     if (bits > 1025) return infinity(neg);
@@ -409,8 +409,8 @@ fn yaml11Float(arena: std.mem.Allocator, plain: []const u8) std.mem.Allocator.Er
     if (coreInfNan(plain)) |f| return f;
     const neg = plain.len > 0 and plain[0] == '-';
     const s = unsigned(plain);
-    const v: f64 = if (std.mem.indexOfScalar(u8, s, ':')) |_| blk: {
-        const dot = std.mem.indexOfScalar(u8, s, '.') orelse s.len;
+    const v: f64 = if (std.mem.findScalar(u8, s, ':')) |_| blk: {
+        const dot = std.mem.findScalar(u8, s, '.') orelse s.len;
         var total: f64 = 0;
         var groups = std.mem.splitScalar(u8, s[0..dot], ':');
         while (groups.next()) |g| {
@@ -425,7 +425,7 @@ fn yaml11Float(arena: std.mem.Allocator, plain: []const u8) std.mem.Allocator.Er
 }
 
 fn withoutUnderscores(arena: std.mem.Allocator, s: []const u8) std.mem.Allocator.Error![]const u8 {
-    if (std.mem.indexOfScalar(u8, s, '_') == null) return s;
+    if (std.mem.findScalar(u8, s, '_') == null) return s;
     return std.mem.replaceOwned(u8, arena, s, "_", "");
 }
 

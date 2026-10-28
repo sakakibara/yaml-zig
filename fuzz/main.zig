@@ -206,7 +206,7 @@ fn mutate(random: Random, len: usize) usize {
         1 => {
             if (len >= max_input_bytes) return len;
             const pos = random.uintAtMost(usize, len);
-            std.mem.copyBackwards(u8, input_buf[pos + 1 .. len + 1], input_buf[pos..len]);
+            @memmove(input_buf[pos + 1 .. len + 1], input_buf[pos..len]);
             input_buf[pos] = random.int(u8);
             return len + 1;
         },
@@ -214,7 +214,7 @@ fn mutate(random: Random, len: usize) usize {
         2 => {
             if (len == 0) return len;
             const pos = random.uintLessThan(usize, len);
-            std.mem.copyForwards(u8, input_buf[pos .. len - 1], input_buf[pos + 1 .. len]);
+            @memmove(input_buf[pos .. len - 1], input_buf[pos + 1 .. len]);
             return len - 1;
         },
         // truncate

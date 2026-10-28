@@ -525,9 +525,9 @@ fn emitFloat(w: *Io.Writer, f: f64) EmitError!void {
         const s = std.fmt.float.render(&buf, f, .{ .mode = .scientific }) catch unreachable;
         // The YAML 1.1 float grammar needs a dot in the mantissa and a sign
         // on the exponent; with both, every reader takes it as a float.
-        const e = std.mem.indexOfScalar(u8, s, 'e').?;
+        const e = std.mem.findScalar(u8, s, 'e').?;
         try w.writeAll(s[0..e]);
-        if (std.mem.indexOfScalar(u8, s[0..e], '.') == null) try w.writeAll(".0");
+        if (std.mem.findScalar(u8, s[0..e], '.') == null) try w.writeAll(".0");
         try w.writeByte('e');
         if (s[e + 1] != '-') try w.writeByte('+');
         return w.writeAll(s[e + 1 ..]);
@@ -564,7 +564,7 @@ pub fn isPlainSafe(s: []const u8, context: PlainContext) bool {
     // A flow indicator ends the scalar; `?` opens a key there (anywhere, to
     // PyYAML); a `:` can end it before a flow indicator, and older readers
     // refuse one inside it.
-    if (context.flow and std.mem.indexOfAny(u8, s, ",[]{}?:") != null) return false;
+    if (context.flow and std.mem.findAny(u8, s, ",[]{}?:") != null) return false;
     if (context.key and (std.unicode.utf8CountCodepoints(s) catch return false) > max_implicit_key_chars) return false;
     return true;
 }
@@ -683,7 +683,13 @@ fn emitDoubleQuoted(w: *Io.Writer, s: []const u8) EmitError!void {
     try w.writeByte('"');
     var it: std.unicode.Utf8Iterator = .{ .bytes = s, .i = 0 };
     while (it.nextCodepointSlice()) |bytes| {
-        const cp = std.unicode.utf8Decode(bytes) catch unreachable;
+        const cp = (switch (bytes.len) {
+            1 => bytes[0],
+            2 => std.unicode.utf8Decode2(bytes[0..2].*),
+            3 => std.unicode.utf8Decode3(bytes[0..3].*),
+            4 => std.unicode.utf8Decode4(bytes[0..4].*),
+            else => unreachable,
+        }) catch unreachable;
         switch (cp) {
             '"' => try w.writeAll("\\\""),
             '\\' => try w.writeAll("\\\\"),
@@ -771,7 +777,7 @@ test "toYaml hook" {
         major: u32,
         minor: u32,
         pub fn toYaml(self: @This(), arena: std.mem.Allocator) std.mem.Allocator.Error!Value {
-            const s = try std.fmt.allocPrint(arena, "{d}.{d}", .{ self.major, self.minor });
+            const s = try arena.print("{d}.{d}", .{ self.major, self.minor });
             return .{ .string = s };
         }
     };
@@ -971,8 +977,8 @@ test "flow style refuses bytes that are not UTF-8, and writes a long or escaped 
         }) };
         var aw: std.Io.Writer.Allocating = .init(a);
         try emit(&aw.writer, m, .{ .sort_keys = sorted });
-        try std.testing.expect(std.mem.indexOf(u8, aw.written(), "? \"" ++ &@as([10]u8, @splat('k'))) != null);
-        try std.testing.expect(std.mem.indexOf(u8, aw.written(), "? \"\\\"\\\"") != null);
+        try std.testing.expect(std.mem.find(u8, aw.written(), "? \"" ++ &@as([10]u8, @splat('k'))) != null);
+        try std.testing.expect(std.mem.find(u8, aw.written(), "? \"\\\"\\\"") != null);
         const back = try parse(a, aw.written(), .{});
         try std.testing.expectEqual(@as(usize, 2), back.map.len);
     }
@@ -1042,7 +1048,7 @@ test "emit stream separates documents" {
     var aw: std.Io.Writer.Allocating = .init(a);
     defer aw.deinit();
     try emitStream(&aw.writer, docs, .{});
-    try std.testing.expect(std.mem.indexOf(u8, aw.written(), "---") != null);
+    try std.testing.expect(std.mem.find(u8, aw.written(), "---") != null);
     const back = try parseStream(a, aw.written(), .{});
     try std.testing.expectEqual(@as(usize, 2), back.len);
     try std.testing.expectEqual(@as(i64, 2), back[1].getT(i64, "b").?);
@@ -1266,11 +1272,11 @@ test "parse and getT recover u64 values above i64 max" {
     defer ar.deinit();
     const a = ar.allocator();
 
-    const src_above = try std.fmt.allocPrint(a, "v: {d}\n", .{above_i64_max});
+    const src_above = try a.print("v: {d}\n", .{above_i64_max});
     const v_above = try parse(a, src_above, .{});
     try std.testing.expectEqual(above_i64_max, v_above.getT(u64, "v").?);
 
-    const src_max = try std.fmt.allocPrint(a, "v: {d}\n", .{max_u64});
+    const src_max = try a.print("v: {d}\n", .{max_u64});
     const v_max = try parse(a, src_max, .{});
     try std.testing.expectEqual(max_u64, v_max.getT(u64, "v").?);
 }
@@ -1284,7 +1290,7 @@ test "small int and i64 min round-trip through the i128 Value.int" {
     try std.testing.expectEqual(@as(i64, 42), v_small.getT(i64, "n").?);
 
     const i64_min = std.math.minInt(i64);
-    const src_min = try std.fmt.allocPrint(a, "n: {d}\n", .{i64_min});
+    const src_min = try a.print("n: {d}\n", .{i64_min});
     const v_min = try parse(a, src_min, .{});
     try std.testing.expectEqual(i64_min, v_min.getT(i64, "n").?);
 }
@@ -1305,8 +1311,8 @@ test "literal << string key is quoted on emit" {
     try emit(&aw.writer, v, .{});
     // The emitted YAML must not contain a bare `<<:` (which would be parsed
     // as a merge key on reparse).
-    try std.testing.expect(std.mem.indexOf(u8, aw.written(), "\"<<\"") != null or
-        std.mem.indexOf(u8, aw.written(), "'<<'") != null);
+    try std.testing.expect(std.mem.find(u8, aw.written(), "\"<<\"") != null or
+        std.mem.find(u8, aw.written(), "'<<'") != null);
     // Round-trip: re-parse must recover the literal "<<" key.
     const back = try parse(a, aw.written(), .{});
     try std.testing.expect(back == .map);

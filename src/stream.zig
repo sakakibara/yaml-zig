@@ -220,7 +220,7 @@ pub const EventReader = struct {
     fn compact(self: *EventReader, consumed: usize) void {
         if (consumed == 0) return;
         const keep = self.doc_buf.items.len - consumed;
-        std.mem.copyForwards(u8, self.doc_buf.items[0..keep], self.doc_buf.items[consumed..]);
+        @memmove(self.doc_buf.items[0..keep], self.doc_buf.items[consumed..]);
         self.doc_buf.shrinkRetainingCapacity(keep);
         self.base += consumed;
     }
@@ -1513,7 +1513,7 @@ test "ValueStream: bad middle document recovers when errors sink is set" {
     try testing.expectEqual(@as(usize, 0), errs.items.len);
     const d = vs.inner.diagnostic() orelse return error.ExpectedDiagnostic;
     _ = item_arena.reset(.retain_capacity);
-    try testing.expect(std.mem.indexOf(u8, d.message, "anchor") != null or d.message.len > 0);
+    try testing.expect(std.mem.find(u8, d.message, "anchor") != null or d.message.len > 0);
 
     // doc 3 is accessible -- the stream recovered past the bad document.
     const v3 = (try vs.next(item_arena.allocator())) orelse return error.ExpectedDoc3;
@@ -1687,15 +1687,15 @@ test "ValueStream: `...` tail straddling a pull boundary agrees with buffered" {
         @memset(body, 'a');
 
         // Stray same-line content after `...`: invalid in both paths.
-        const stray = try std.fmt.allocPrint(a, "---\nk: {s}\n... x\n---\nsecond: 1\n", .{body});
+        const stray = try a.print("---\nk: {s}\n... x\n---\nsecond: 1\n", .{body});
         try expectStreamMatchesBuffered(a, stray);
 
         // Comment tail after `...`: a clean boundary; both frame two documents.
-        const comment = try std.fmt.allocPrint(a, "---\nk: {s}\n... #c\n---\nsecond: 1\n", .{body});
+        const comment = try a.print("---\nk: {s}\n... #c\n---\nsecond: 1\n", .{body});
         try expectStreamMatchesBuffered(a, comment);
 
         // Bare `...`: a clean boundary; both frame two documents.
-        const bare = try std.fmt.allocPrint(a, "---\nk: {s}\n...\n---\nsecond: 1\n", .{body});
+        const bare = try a.print("---\nk: {s}\n...\n---\nsecond: 1\n", .{body});
         try expectStreamMatchesBuffered(a, bare);
     }
 }

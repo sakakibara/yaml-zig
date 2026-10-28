@@ -140,7 +140,7 @@ fn maybeTrivia(ctx: *GenCtx) !void {
             try ctx.trivia.append(ctx.arena, "");
         },
         1 => {
-            const line = try std.fmt.allocPrint(ctx.arena, "# note {d}\n", .{ctx.comment_counter});
+            const line = try ctx.arena.print("# note {d}\n", .{ctx.comment_counter});
             ctx.comment_counter += 1;
             try ctx.buf.appendSlice(ctx.arena, line);
             const text = line[0 .. line.len - 1];
@@ -165,7 +165,7 @@ fn genFixtureKey(ctx: *GenCtx, used: *std.ArrayList([]const u8)) ![]const u8 {
         }
         if (!dup) return k;
     }
-    const k = try std.fmt.allocPrint(ctx.arena, "gen{d}", .{ctx.fallback_counter});
+    const k = try ctx.arena.print("gen{d}", .{ctx.fallback_counter});
     ctx.fallback_counter += 1;
     return k;
 }
@@ -350,9 +350,9 @@ fn genTarget(arena: Allocator, rng: std.Random, gen: *const GenDocument) !Target
         // which would mask the PathNotFound this branch targets.
         const leaf_is_index = rng.boolean();
         const dotted = if (leaf_is_index)
-            try std.fmt.allocPrint(arena, "{s}[{d}]", .{ pickNewBareKey(rng), rng.uintLessThan(u8, 4) })
+            try arena.print("{s}[{d}]", .{ pickNewBareKey(rng), rng.uintLessThan(u8, 4) })
         else
-            try std.fmt.allocPrint(arena, "{s}[{d}].{s}", .{ pickNewBareKey(rng), rng.uintLessThan(u8, 4), pickNewBareKey(rng) });
+            try arena.print("{s}[{d}].{s}", .{ pickNewBareKey(rng), rng.uintLessThan(u8, 4), pickNewBareKey(rng) });
         return .{
             .kind = .index_missing_tail,
             .dotted = dotted,
@@ -469,7 +469,7 @@ fn checkRemoveRoundTrip(arena: Allocator, gen: *const GenDocument, target: Targe
     }
     if (target.kind == .replace_existing) {
         for (gen.comments) |c| {
-            if (std.mem.indexOf(u8, out, c) == null) return error.RemoveCommentLost;
+            if (std.mem.find(u8, out, c) == null) return error.RemoveCommentLost;
         }
     }
 }

@@ -609,7 +609,7 @@ pub const Parser = struct {
         // The scanner does not remove comments from the directive span, so
         // `%YAML 1.3 # comment` arrives with the full comment text included.
         var content = text[5..]; // skip `%YAML`
-        if (std.mem.indexOf(u8, content, " #")) |comment_pos| {
+        if (std.mem.find(u8, content, " #")) |comment_pos| {
             content = content[0..comment_pos];
         }
 
@@ -618,7 +618,7 @@ pub const Parser = struct {
         const version = it.next() orelse return self.failAt(t.span, "missing %YAML version");
         // A `#` inside the version token means the `#` was not space-separated
         // (e.g. `%YAML 1.1#...`): reject as an unseparated comment.
-        if (std.mem.indexOfScalar(u8, version, '#') != null)
+        if (std.mem.findScalar(u8, version, '#') != null)
             return self.failAt(t.span, "comment must be preceded by white space");
         if (it.next() != null) return self.failAt(t.span, "extra content after %YAML version");
     }
@@ -688,7 +688,7 @@ pub const Parser = struct {
         if (raw.len >= 2 and raw[1] == '!') {
             handle = raw[0..2]; // `!!`
             suffix = raw[2..];
-        } else if (std.mem.indexOfScalarPos(u8, raw, 1, '!')) |j| {
+        } else if (std.mem.findScalarPos(u8, raw, 1, '!')) |j| {
             handle = raw[0 .. j + 1]; // `!name!`
             suffix = raw[j + 1 ..];
         } else {
@@ -1186,7 +1186,7 @@ pub const Parser = struct {
 /// matching reference parsers). Returns the input slice unchanged when it
 /// holds no `%`, avoiding allocation in the common case.
 fn percentDecode(a: std.mem.Allocator, s: []const u8) Error![]const u8 {
-    if (std.mem.indexOfScalar(u8, s, '%') == null) return s;
+    if (std.mem.findScalar(u8, s, '%') == null) return s;
     var out: std.ArrayList(u8) = .empty;
     try out.ensureTotalCapacity(a, s.len);
     var i: usize = 0;

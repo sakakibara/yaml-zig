@@ -383,8 +383,8 @@ fn readCaseFile(io: Io, a: std.mem.Allocator, dir: Io.Dir, id: []const u8, name:
 /// When the body holds no multi-byte glyph the original slice is returned
 /// unchanged (no allocation).
 fn decodeGlyphs(a: std.mem.Allocator, raw: []const u8) ![]u8 {
-    if (std.mem.indexOfScalar(u8, raw, 0xe2) == null and
-        std.mem.indexOfScalar(u8, raw, 0xc2) == null) return @constCast(raw);
+    if (std.mem.findScalar(u8, raw, 0xe2) == null and
+        std.mem.findScalar(u8, raw, 0xc2) == null) return @constCast(raw);
     var out: std.ArrayList(u8) = .empty;
     try out.ensureTotalCapacity(a, raw.len);
     var i: usize = 0;
@@ -435,7 +435,7 @@ fn decodeGlyphs(a: std.mem.Allocator, raw: []const u8) ![]u8 {
 /// otherwise break the byte-exact comparisons. The suite encodes any significant
 /// carriage return as a glyph decoded above, so a literal CR is never content.
 fn stripCr(a: std.mem.Allocator, raw: []u8) ![]u8 {
-    if (std.mem.indexOfScalar(u8, raw, '\r') == null) return raw;
+    if (std.mem.findScalar(u8, raw, '\r') == null) return raw;
     var out: std.ArrayList(u8) = .empty;
     try out.ensureTotalCapacity(a, raw.len);
     for (raw) |b| {

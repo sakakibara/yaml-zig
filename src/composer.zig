@@ -716,7 +716,7 @@ pub const Composer = struct {
     /// Always a string.
     fn cookSingle(self: *Composer, raw: []const u8) Error![]const u8 {
         const folded = try foldFlowBreaks(self.arena, raw);
-        if (std.mem.indexOfScalar(u8, folded, '\'') == null) return folded;
+        if (std.mem.findScalar(u8, folded, '\'') == null) return folded;
         var out = try std.ArrayList(u8).initCapacity(self.arena, folded.len);
         var i: usize = 0;
         while (i < folded.len) : (i += 1) {
@@ -1017,7 +1017,7 @@ const LineIterator = struct {
 /// white space on each interior line is trimmed. No break in the input is
 /// a fast no-op.
 fn foldFlowBreaks(arena: std.mem.Allocator, raw: []const u8) ![]const u8 {
-    if (std.mem.indexOfAny(u8, raw, "\n\r") == null) return raw;
+    if (std.mem.findAny(u8, raw, "\n\r") == null) return raw;
     var out: std.ArrayList(u8) = .empty;
     var lines = LineIterator.init(raw);
     var first = true;
@@ -1081,7 +1081,7 @@ fn appendFoldedBreaks(out: *std.ArrayList(u8), arena: std.mem.Allocator, breaks:
 /// A run of backslashes decides continuation by parity: an odd count ends
 /// in a live `\`, an even count is fully escaped pairs.
 fn foldFlowBreaksDouble(arena: std.mem.Allocator, raw: []const u8) ![]const u8 {
-    if (std.mem.indexOfAny(u8, raw, "\n\r") == null) return raw;
+    if (std.mem.findAny(u8, raw, "\n\r") == null) return raw;
     var out: std.ArrayList(u8) = .empty;
     var lines = LineIterator.init(raw);
     var first = true;
@@ -1727,7 +1727,7 @@ test "renderRich renders a caret line" {
     var aw: std.Io.Writer.Allocating = .init(a);
     defer aw.deinit();
     try errs.items[0].renderRich(&aw.writer, src);
-    try std.testing.expect(std.mem.indexOf(u8, aw.written(), "^") != null);
+    try std.testing.expect(std.mem.find(u8, aw.written(), "^") != null);
 }
 
 test "null errors bails on first error" {

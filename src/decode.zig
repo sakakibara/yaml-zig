@@ -55,7 +55,7 @@ const no_span: value_mod.Span = .{ .start = 0, .end = 0 };
 
 fn appendDiag(list: *std.ArrayList(composer.Diagnostic), arena: Allocator, path: *const PathBuilder, msg: []const u8, suggestion: ?[]const u8) Allocator.Error!void {
     const full = if (path.slice().len > 0)
-        try std.fmt.allocPrint(arena, "{s} (at {s})", .{ msg, path.slice() })
+        try arena.print("{s} (at {s})", .{ msg, path.slice() })
     else
         msg;
     try list.append(arena, .{ .message = full, .span = no_span, .suggestion = suggestion });
@@ -74,7 +74,7 @@ const PathBuilder = struct {
     pub fn pushIndex(self: *PathBuilder, arena: Allocator, idx: usize) Allocator.Error!usize {
         const prev = self.buf.items.len;
         var tmp: [24]u8 = undefined;
-        const s = std.fmt.bufPrint(&tmp, "[{d}]", .{idx}) catch unreachable;
+        const s = std.mem.print(&tmp, "[{d}]", .{idx}) catch unreachable;
         try self.buf.appendSlice(arena, s);
         return prev;
     }
@@ -241,7 +241,7 @@ fn decodeInner(comptime T: type, arena: Allocator, value: Value, options: compos
     if (comptime @typeInfo(T) != .optional) {
         if (value == .null) {
             if (options.errors) |list| {
-                const msg = try std.fmt.allocPrint(arena, "expected {s}, got null", .{@typeName(T)});
+                const msg = try arena.print("expected {s}, got null", .{@typeName(T)});
                 try appendDiag(list, arena, path, msg, null);
             }
             return error.MissingField;
@@ -269,7 +269,7 @@ fn decodeInner(comptime T: type, arena: Allocator, value: Value, options: compos
 fn decodeBool(value: Value, arena: Allocator, options: composer.ParseOptions, path: *PathBuilder) DecodeError!bool {
     if (value != .bool) {
         if (options.errors) |list| {
-            const msg = try std.fmt.allocPrint(arena, "expected boolean, got {s}", .{@tagName(value)});
+            const msg = try arena.print("expected boolean, got {s}", .{@tagName(value)});
             try appendDiag(list, arena, path, msg, null);
         }
         return error.TypeMismatch;
@@ -280,14 +280,14 @@ fn decodeBool(value: Value, arena: Allocator, options: composer.ParseOptions, pa
 fn decodeInt(comptime T: type, value: Value, arena: Allocator, options: composer.ParseOptions, path: *PathBuilder) DecodeError!T {
     if (value != .int) {
         if (options.errors) |list| {
-            const msg = try std.fmt.allocPrint(arena, "expected integer, got {s}", .{@tagName(value)});
+            const msg = try arena.print("expected integer, got {s}", .{@tagName(value)});
             try appendDiag(list, arena, path, msg, null);
         }
         return error.TypeMismatch;
     }
     if (std.math.cast(T, value.int)) |v| return v;
     if (options.errors) |list| {
-        const msg = try std.fmt.allocPrint(arena, "integer {d} out of range for {s}", .{ value.int, @typeName(T) });
+        const msg = try arena.print("integer {d} out of range for {s}", .{ value.int, @typeName(T) });
         try appendDiag(list, arena, path, msg, null);
     }
     return error.Overflow;
@@ -308,7 +308,7 @@ fn decodeFloat(comptime T: type, value: Value, arena: Allocator, options: compos
         },
         else => {
             if (options.errors) |list| {
-                const msg = try std.fmt.allocPrint(arena, "expected float, got {s}", .{@tagName(value)});
+                const msg = try arena.print("expected float, got {s}", .{@tagName(value)});
                 try appendDiag(list, arena, path, msg, null);
             }
             return error.TypeMismatch;
@@ -321,7 +321,7 @@ fn decodePointer(comptime T: type, comptime p: std.lang.Type.Pointer, arena: All
     if (p.child == u8 and p.attrs.@"const") {
         if (value != .string) {
             if (options.errors) |list| {
-                const msg = try std.fmt.allocPrint(arena, "expected string, got {s}", .{@tagName(value)});
+                const msg = try arena.print("expected string, got {s}", .{@tagName(value)});
                 try appendDiag(list, arena, path, msg, null);
             }
             return error.TypeMismatch;
@@ -330,7 +330,7 @@ fn decodePointer(comptime T: type, comptime p: std.lang.Type.Pointer, arena: All
     }
     if (value != .seq) {
         if (options.errors) |list| {
-            const msg = try std.fmt.allocPrint(arena, "expected sequence, got {s}", .{@tagName(value)});
+            const msg = try arena.print("expected sequence, got {s}", .{@tagName(value)});
             try appendDiag(list, arena, path, msg, null);
         }
         return error.TypeMismatch;
@@ -348,14 +348,14 @@ fn decodePointer(comptime T: type, comptime p: std.lang.Type.Pointer, arena: All
 fn decodeArray(comptime T: type, comptime a: std.lang.Type.Array, arena: Allocator, value: Value, options: composer.ParseOptions, path: *PathBuilder) DecodeError!T {
     if (value != .seq) {
         if (options.errors) |list| {
-            const msg = try std.fmt.allocPrint(arena, "expected sequence, got {s}", .{@tagName(value)});
+            const msg = try arena.print("expected sequence, got {s}", .{@tagName(value)});
             try appendDiag(list, arena, path, msg, null);
         }
         return error.TypeMismatch;
     }
     if (value.seq.len != a.len) {
         if (options.errors) |list| {
-            const msg = try std.fmt.allocPrint(arena, "sequence length mismatch: expected {d}, got {d}", .{ a.len, value.seq.len });
+            const msg = try arena.print("sequence length mismatch: expected {d}, got {d}", .{ a.len, value.seq.len });
             try appendDiag(list, arena, path, msg, null);
         }
         return error.TypeMismatch;
@@ -380,7 +380,7 @@ fn decodeStruct(comptime T: type, comptime s: std.lang.Type.Struct, arena: Alloc
     comptime validateAnnotations(T);
     if (value != .map) {
         if (options.errors) |list| {
-            const msg = try std.fmt.allocPrint(arena, "expected mapping, got {s}", .{@tagName(value)});
+            const msg = try arena.print("expected mapping, got {s}", .{@tagName(value)});
             try appendDiag(list, arena, path, msg, null);
         }
         return error.TypeMismatch;
@@ -403,7 +403,7 @@ fn decodeStruct(comptime T: type, comptime s: std.lang.Type.Struct, arena: Alloc
             const suggestion = lev.closestMatch(key, comptime expectedKeys(T), lev.suggestionThreshold(key.len));
 
             if (options.errors) |list| {
-                const msg = try std.fmt.allocPrint(arena, "unknown field `{s}`", .{key});
+                const msg = try arena.print("unknown field `{s}`", .{key});
                 const suggestion_owned: ?[]const u8 = if (suggestion) |s_str| try arena.dupe(u8, s_str) else null;
                 try appendDiag(list, arena, path, msg, suggestion_owned);
             }
@@ -440,7 +440,7 @@ fn decodeStruct(comptime T: type, comptime s: std.lang.Type.Struct, arena: Alloc
                 @field(out, name) = null;
             } else {
                 if (options.errors) |list| {
-                    const msg = try std.fmt.allocPrint(arena, "missing required field `{s}`", .{eff_key});
+                    const msg = try arena.print("missing required field `{s}`", .{eff_key});
                     try appendDiag(list, arena, path, msg, null);
                 }
                 return error.MissingField;
@@ -466,7 +466,7 @@ fn decodeTaggedUnion(comptime T: type, arena: Allocator, value: Value, options: 
     comptime validateAnnotations(T);
     if (value != .map) {
         if (options.errors) |list| {
-            const msg = try std.fmt.allocPrint(arena, "expected mapping for {s}, got {s}", .{ @typeName(T), @tagName(value) });
+            const msg = try arena.print("expected mapping for {s}, got {s}", .{ @typeName(T), @tagName(value) });
             try appendDiag(list, arena, path, msg, null);
         }
         return error.TypeMismatch;
@@ -475,14 +475,14 @@ fn decodeTaggedUnion(comptime T: type, arena: Allocator, value: Value, options: 
     const tag_field = T.yaml_tag;
     const tag_value = mapGet(entries, tag_field) orelse {
         if (options.errors) |list| {
-            const msg = try std.fmt.allocPrint(arena, "missing discriminator field `{s}` for {s}", .{ tag_field, @typeName(T) });
+            const msg = try arena.print("missing discriminator field `{s}` for {s}", .{ tag_field, @typeName(T) });
             try appendDiag(list, arena, path, msg, null);
         }
         return error.MissingField;
     };
     if (tag_value != .string) {
         if (options.errors) |list| {
-            const msg = try std.fmt.allocPrint(arena, "expected string for discriminator `{s}`, got {s}", .{ tag_field, @tagName(tag_value) });
+            const msg = try arena.print("expected string for discriminator `{s}`, got {s}", .{ tag_field, @tagName(tag_value) });
             try appendDiag(list, arena, path, msg, null);
         }
         return error.TypeMismatch;
@@ -512,7 +512,7 @@ fn decodeTaggedUnion(comptime T: type, arena: Allocator, value: Value, options: 
     if (options.errors) |list| {
         const tag = tag_value.string;
         const suggestion = lev.closestMatch(tag, comptime variantNames(T), lev.suggestionThreshold(tag.len));
-        const msg = try std.fmt.allocPrint(arena, "unknown variant `{s}` for {s}", .{ tag, @typeName(T) });
+        const msg = try arena.print("unknown variant `{s}` for {s}", .{ tag, @typeName(T) });
         const suggestion_owned: ?[]const u8 = if (suggestion) |s_str| try arena.dupe(u8, s_str) else null;
         try appendDiag(list, arena, path, msg, suggestion_owned);
     }
@@ -524,7 +524,7 @@ fn decodeEnum(comptime T: type, value: Value, arena: Allocator, options: compose
         .string => |s| {
             if (std.meta.stringToEnum(T, s)) |v| return v;
             if (options.errors) |list| {
-                const msg = try std.fmt.allocPrint(arena, "invalid enum value `{s}` for {s}", .{ s, @typeName(T) });
+                const msg = try arena.print("invalid enum value `{s}` for {s}", .{ s, @typeName(T) });
                 try appendDiag(list, arena, path, msg, null);
             }
             return error.InvalidEnumValue;
@@ -532,14 +532,14 @@ fn decodeEnum(comptime T: type, value: Value, arena: Allocator, options: compose
         .int => |n| {
             if (std.enums.fromInt(T, n)) |v| return v;
             if (options.errors) |list| {
-                const msg = try std.fmt.allocPrint(arena, "integer {d} is not a valid value of {s}", .{ n, @typeName(T) });
+                const msg = try arena.print("integer {d} is not a valid value of {s}", .{ n, @typeName(T) });
                 try appendDiag(list, arena, path, msg, null);
             }
             return error.InvalidEnumValue;
         },
         else => {
             if (options.errors) |list| {
-                const msg = try std.fmt.allocPrint(arena, "expected string or integer for enum {s}, got {s}", .{ @typeName(T), @tagName(value) });
+                const msg = try arena.print("expected string or integer for enum {s}, got {s}", .{ @typeName(T), @tagName(value) });
                 try appendDiag(list, arena, path, msg, null);
             }
             return error.TypeMismatch;
@@ -921,7 +921,7 @@ test "decode: tagged union unknown variant diagnostic suggests closest match" {
 
     _ = parseInto(Plugin, a, "kind: htpp\n", .{ .errors = &errs }) catch {};
     try testing.expect(errs.items.len == 1);
-    try testing.expect(std.mem.indexOf(u8, errs.items[0].message, "unknown variant `htpp`") != null);
+    try testing.expect(std.mem.find(u8, errs.items[0].message, "unknown variant `htpp`") != null);
     try testing.expectEqualStrings("http", errs.items[0].suggestion.?);
 }
 
@@ -938,7 +938,7 @@ test "decode: tagged union missing discriminator diagnostic names tag field" {
 
     _ = parseInto(Plugin, a, "port: 80\n", .{ .errors = &errs }) catch {};
     try testing.expect(errs.items.len == 1);
-    try testing.expect(std.mem.indexOf(u8, errs.items[0].message, "missing discriminator field `kind`") != null);
+    try testing.expect(std.mem.find(u8, errs.items[0].message, "missing discriminator field `kind`") != null);
 }
 
 test "decode: missing-field diagnostic reports the YAML wire key" {
@@ -954,8 +954,8 @@ test "decode: missing-field diagnostic reports the YAML wire key" {
 
     _ = parseInto(C, a, "{}\n", .{ .errors = &errs }) catch {};
     try testing.expect(errs.items.len == 1);
-    try testing.expect(std.mem.indexOf(u8, errs.items[0].message, "`listen-addr`") != null);
-    try testing.expect(std.mem.indexOf(u8, errs.items[0].message, "listen_addr") == null);
+    try testing.expect(std.mem.find(u8, errs.items[0].message, "`listen-addr`") != null);
+    try testing.expect(std.mem.find(u8, errs.items[0].message, "listen_addr") == null);
 }
 
 test "decode: tagged union void variant" {
@@ -1000,7 +1000,7 @@ test "decode: nested type mismatch reports dotted path in message" {
     _ = parseInto(C, a, "server:\n  port: \"8080\"\n", .{ .errors = &errs }) catch {};
 
     try testing.expect(errs.items.len == 1);
-    try testing.expect(std.mem.indexOf(u8, errs.items[0].message, "server.port") != null);
+    try testing.expect(std.mem.find(u8, errs.items[0].message, "server.port") != null);
 }
 
 test "PathBuilder: push/restore symmetry" {

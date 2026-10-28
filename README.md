@@ -625,7 +625,7 @@ cd zig-out/docs && python3 -m http.server 8000
 ```sh
 zig build test           # unit + conformance tests
 zig build fuzz           # random-input fuzzer (zig build fuzz -- [seed] [iterations])
-zig build bench          # microbenchmarks (ReleaseFast)
+zig build bench          # microbenchmarks (fast optimize mode)
 zig build docs           # generate reference docs
 zig build examples       # build all examples
 zig build example-basic  # build and run one example
@@ -691,7 +691,7 @@ zig build bench
 The harness reports min/p50/p99/max latency and throughput across 100 samples
 with explicit warmup. See `bench/main.zig`.
 
-On an Apple M1 Max (aarch64-macos), Zig 0.17.0, ReleaseFast -- p50
+On an Apple M1 Max (aarch64-macos), Zig 0.17.0, fast optimize mode -- p50
 latency, median of ten runs, cross-run spread below 8% per cell:
 
 | Benchmark | small (970 B) | medium (22 KB) | large (291 KB) |
