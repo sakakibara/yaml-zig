@@ -253,6 +253,40 @@ annotations would silently not apply.
 For tagged unions (`yaml_tag`), the discriminator key is emitted first with
 the payload's fields inline, so the output decodes back via `parseInto`.
 
+### Emit (KYAML)
+
+KYAML is the flow-style subset from KEP-5295. `emitKyaml`,
+`emitKyamlStream`, and `emitKyamlTyped` write it. The block emitter is
+unchanged.
+
+```zig
+try yaml.emitKyaml(&aw.writer, v, .{});
+try yaml.emitKyaml(&aw.writer, v, .{ .compact = true });
+```
+
+Every document starts with `---`. Mappings are `{}`, lists are `[]`, and a
+comma follows every entry unless the closing bracket sits on that entry's
+line. A list whose items are only mappings or lists keeps those brackets
+together. `compact` puts the document on one line, separates entries with
+`, `, and does not fold strings. Strings are double-quoted. A multi-line
+string is a flow fold: a trailing `\` drops the line break, `\n` keeps a
+newline, and `\` comes before a space only when that space is written as
+itself. A key is plain only when `isPlainSafe` says a flow implicit key
+reads back as that string, so `yes`, `0x_`, `0b_`, and `0123` are quoted.
+A key longer than 1024 code points, or a list or mapping used as a key,
+returns `error.UnrepresentableScalar`. Numbers, booleans, and null use
+`emit`'s spelling (`null`, `true`, `1.0`, `.nan`); as keys they are text,
+so they read back as strings. Bytes that are not UTF-8 return
+`error.InvalidUtf8`.
+
+`Value` has already expanded aliases and merge keys, and it does not carry
+tags or comments, so none of those are written. `tests/kyaml/` holds inputs
+and checked output. `go run tools/kyaml-golden/main.go` regenerates that
+output from the v1.6.0 encoder; bare `nan` and `inf` keys then need to be
+unquoted, because this library only treats `.nan` and `.inf` as floats.
+The folded `\` rule, invalid UTF-8, keys over 1024 code points, and `0x_`
+/ `0b_` quoting also differ from that encoder.
+
 ### Document model (lossless editing)
 
 Parse a YAML file, edit values in place, and emit byte-identical output
@@ -567,6 +601,9 @@ mapping's keys; keys already present in the local mapping win. Set
 | `emit(w, value, options)` | Emit one `Value` as block YAML. |
 | `emitStream(w, values, options)` | Emit a slice of documents, `---`-separated. |
 | `emitTyped(w, value, arena, options)` | Emit a typed value, honoring annotations and hooks. |
+| `emitKyaml(w, value, options)` | Emit one `Value` as KYAML. |
+| `emitKyamlStream(w, values, options)` | Emit every document as KYAML, each with a `---` header. |
+| `emitKyamlTyped(w, value, arena, options)` | Emit a typed value as KYAML. |
 | `cookScalarText(arena, src, event)` | Cook a scalar event to its presentation text. |
 | `tagOf(schema, plain)` | Name the type a schema's grammar gives a plain scalar. |
 | `isPlainSafe(s, context)` | Whether `s` can be written as a plain scalar - a value or an implicit key, in block or flow context - and read back as this string by the readers `emit` accounts for; a non-breaking release may only make it stricter. |
@@ -604,7 +641,7 @@ mapping's keys; keys already present in the local mapping win. Set
 
 `Value`, `Entry`, `Span`, `Spans`, `Schema`, `Tag`, `Scanner`, `Token`,
 `TokenKind`, `ScalarStyle`, `Parser`, `Event`, `EventKind`, `ParseOptions`,
-`EmitOptions`, `Diagnostic`, `Error`, `ReaderError`, `DecodeError`,
+`EmitOptions`, `KyamlOptions`, `Diagnostic`, `Error`, `ReaderError`, `DecodeError`,
 `EmitError`, `Document`, `DocumentError`, `EventReader`, `ValueStream`,
 `StreamError`.
 

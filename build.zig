@@ -42,6 +42,22 @@ pub fn build(b: *std.Build) void {
     const run_conformance = b.addRunArtifact(conformance_tests);
     test_step.dependOn(&run_conformance.step);
 
+    // KYAML golden files. The directory is an absolute host path, same as
+    // the conformance corpus, so `zig build test` does not depend on cwd.
+    const kyaml_fixture_options = b.addOptions();
+    kyaml_fixture_options.addOption([]const u8, "fixtures_path", fromRoot(b, "tests/kyaml"));
+
+    const kyaml_fixture_module = b.createModule(.{
+        .root_source_file = b.path("src/kyaml_fixtures.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    kyaml_fixture_module.addOptions("kyaml_fixture_options", kyaml_fixture_options);
+
+    const kyaml_fixture_tests = b.addTest(.{ .root_module = kyaml_fixture_module });
+    const run_kyaml_fixtures = b.addRunArtifact(kyaml_fixture_tests);
+    test_step.dependOn(&run_kyaml_fixtures.step);
+
     // Deterministic property/round-trip battery over Document's editor.
     const document_property_tests = b.addTest(.{
         .root_module = b.createModule(.{

@@ -12,7 +12,10 @@
 //!    crashes, hangs, or blows memory. An errors sink is attached on a
 //!    coin flip to exercise the recovery path.
 //! 2. If `parseStream` succeeds, `emitStream` succeeds and re-parsing the
-//!    emitted output yields a deeply equal document slice.
+//!    emitted output yields a deeply equal document slice. `emitKyamlStream`
+//!    then does the same: emitting, parsing, and emitting again is
+//!    byte-identical, and where every key is a string the values match.
+//!    A list or mapping key, or a key over 1024 code points, is skipped.
 //! 3. `ValueStream` over a fixed in-memory reader agrees with `parseStream`
 //!    on both outcome (success/failure) and per-document values, exercising
 //!    the reader-backed `pull()` / framing path across 4096-byte chunk
@@ -259,6 +262,7 @@ fn checkInput(a: std.mem.Allocator, random: Random, input: []const u8) Failure!v
     };
 
     if (docs) |values| try checkRoundTrip(a, values);
+    if (docs) |values| try checkKyamlRoundTrip(a, values);
     if (docs) |values| try checkSortStable(a, values);
     try checkTypedStream(a, input);
 }
@@ -358,6 +362,77 @@ fn checkRoundTrip(a: std.mem.Allocator, values: []const yaml.Value) Failure!void
     if (reparsed.len != values.len) return error.RoundTripMismatch;
     for (values, reparsed) |va, vb| {
         if (!valueEql(va, vb)) return error.RoundTripMismatch;
+    }
+}
+
+/// KYAML invariant, beside `checkRoundTrip`. Emitting, parsing, and
+/// emitting again is byte-identical. Where every key is a string, the
+/// reparsed values equal the originals. A list or mapping key, or a key
+/// over 1024 code points, cannot be written and is skipped.
+fn checkKyamlRoundTrip(a: std.mem.Allocator, values: []const yaml.Value) Failure!void {
+    if (values.len == 0) return;
+    var first: std.Io.Writer.Allocating = .init(a);
+    defer first.deinit();
+    yaml.emitKyamlStream(&first.writer, values, .{}) catch |err| switch (err) {
+        error.UnrepresentableScalar => return,
+        error.WriteFailed, error.OutOfMemory => return error.OutOfMemory,
+        error.NestingTooDeep, error.UnrepresentableInt, error.InvalidUtf8 => return error.EmitFailed,
+    };
+
+    const reparsed = yaml.parseStream(a, first.written(), .{
+        .max_depth = max_depth,
+        .max_alias_nodes = max_alias_nodes,
+    }) catch return error.ReparseFailed;
+
+    var second: std.Io.Writer.Allocating = .init(a);
+    defer second.deinit();
+    yaml.emitKyamlStream(&second.writer, reparsed, .{}) catch |err| switch (err) {
+        error.WriteFailed, error.OutOfMemory => return error.OutOfMemory,
+        error.NestingTooDeep, error.UnrepresentableScalar, error.UnrepresentableInt, error.InvalidUtf8 => return error.EmitFailed,
+    };
+    if (!std.mem.eql(u8, first.written(), second.written())) return error.RoundTripMismatch;
+
+    if (!keysAreStrings(values)) return;
+    if (reparsed.len != values.len) return error.RoundTripMismatch;
+    for (values, reparsed) |va, vb| {
+        if (!valueEql(va, vb)) return error.RoundTripMismatch;
+    }
+
+    var compact: std.Io.Writer.Allocating = .init(a);
+    defer compact.deinit();
+    yaml.emitKyamlStream(&compact.writer, values, .{ .compact = true }) catch |err| switch (err) {
+        error.WriteFailed, error.OutOfMemory => return error.OutOfMemory,
+        error.NestingTooDeep, error.UnrepresentableScalar, error.UnrepresentableInt, error.InvalidUtf8 => return error.EmitFailed,
+    };
+    const compact_back = yaml.parseStream(a, compact.written(), .{
+        .max_depth = max_depth,
+        .max_alias_nodes = max_alias_nodes,
+    }) catch return error.ReparseFailed;
+    if (compact_back.len != values.len) return error.RoundTripMismatch;
+    for (values, compact_back) |va, vb| {
+        if (!valueEql(va, vb)) return error.RoundTripMismatch;
+    }
+}
+
+fn keysAreStrings(values: []const yaml.Value) bool {
+    for (values) |v| if (!valueKeysAreStrings(v)) return false;
+    return true;
+}
+
+fn valueKeysAreStrings(v: yaml.Value) bool {
+    switch (v) {
+        .seq => |items| {
+            for (items) |item| if (!valueKeysAreStrings(item)) return false;
+            return true;
+        },
+        .map => |entries| {
+            for (entries) |entry| {
+                if (entry.key != .string) return false;
+                if (!valueKeysAreStrings(entry.value)) return false;
+            }
+            return true;
+        },
+        else => return true,
     }
 }
 

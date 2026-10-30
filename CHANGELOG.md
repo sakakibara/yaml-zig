@@ -6,6 +6,15 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `emitKyaml`, `emitKyamlStream`, and `emitKyamlTyped` write KYAML
+  (KEP-5295). `KyamlOptions.compact` selects the one-line form. The block
+  emitter is unchanged. A string that is not UTF-8 returns `InvalidUtf8`.
+  A key longer than 1024 code points, or a list or mapping used as a key,
+  returns `UnrepresentableScalar`. Comments are not kept. Output differs
+  from `sigs.k8s.io/yaml/kyaml` v1.6.0 where the README says it does.
+
 ## [0.6.0] - 2026-10-22
 
 ### Breaking
